@@ -51,9 +51,20 @@ inline const std::vector<std::string>& top_level_keys() {
   return k;
 }
 
-inline std::array<const char*, 7> audit_actions() {
+// 8 MiB hard cap on project document size, enforced at read/input time
+// (read_file_capped, sf_project_from_json) — never post-parse.
+const size_t kMaxDocBytes = 8 * 1024 * 1024;
+
+// FIFO cap on in-memory audit entries; oldest dropped first.
+const size_t kMaxAuditEntries = 1000;
+
+// Must stay in lockstep with project_schema.json auditLog[].action enum
+// (13 items) — schema.json is the source of truth.
+inline std::array<const char*, 13> audit_actions() {
   return {"project.create", "project.open", "project.save", "project.migrate",
-          "project.rename", "venue.update", "scene.update"};
+          "project.rename", "venue.update", "scene.update", "graph.addNode",
+          "graph.removeNode", "graph.addEdge", "graph.removeEdge", "graph.setMixer",
+          "graph.setPreset"};
 }
 
 // ---------------------------------------------------------------------------

@@ -64,3 +64,21 @@ def test_golden_v1_immutable():
     path = REPO_ROOT / "tests" / "golden" / "schema_golden_v1.json"
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     assert digest == "2a2b1ca474d5b693b74cf6299188699f1e4d5a69e3f93f03ccf4a7a4b544a57f"
+
+
+def test_golden_v2_immutable():
+    import hashlib
+    path = REPO_ROOT / "tests" / "golden" / "schema_golden_v2.json"
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    # SHA-256 computed from the regenerated file (byte-identical to project_schema.json)
+    assert digest == "48bd5b70b001ca79c7b5c3ead1aab523ceb6964c622568d7c6d65772a29e627e"
+
+
+def test_validate_signalgraph_v2():
+    assert validate_project(_load("project_signalgraph_v2.json")) == []
+
+
+def test_validate_graph_corrupt():
+    errors = validate_project(_load("project_graph_corrupt.json"))
+    # 4 errors: invalid node kind, mixer missing nodeId, dangling edge, cycle.
+    assert len(errors) >= 4, errors

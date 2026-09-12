@@ -28,6 +28,26 @@ bool read_file(const std::string& path, std::string& out) {
   return true;
 }
 
+// Read with byte-cap enforced at input time (not post-parse).
+// Returns false if file exceeds max_bytes; caller checks errOut.
+bool read_file_capped(const std::string& path, size_t max_bytes, std::string& out, std::string& errOut) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) {
+    errOut = "cannot open";
+    return false;
+  }
+  in.seekg(0, std::ios::end);
+  size_t sz = static_cast<size_t>(in.tellg());
+  if (sz > max_bytes) {
+    errOut = "file too large";
+    return false;  // do NOT populate out; caller checks result
+  }
+  out.resize(sz);
+  in.seekg(0);
+  in.read(out.data(), out.size());
+  return true;
+}
+
 sf_result_t write_file_atomic(const std::string& path, const std::string& data) {
   const std::string tmp = path + ".tmp";
   std::FILE* f = std::fopen(tmp.c_str(), "wb");
@@ -174,6 +194,11 @@ extern "C" sf_result_t sf_project_from_json(const char* json, size_t len, sf_pro
     return SF_E_INVALID_ARG;
   }
   try {
+    // Pre-check byte-cap before parsing (not post-parse)
+    if (len > sfcore::kMaxDocBytes) {
+      sfcore::set_last_error("JSON input exceeds 8 MiB limit");
+      return SF_E_FILE_TOO_LARGE;
+    }
     sfcore::json j = sfcore::json::parse(json, json + len);
     // Migration if needed.
     const int sv = sfcore::peek_schema_version(j);
@@ -242,7 +267,12 @@ extern "C" sf_result_t sf_project_open_from_path(const char* path, sf_project_t*
   }
   try {
     std::string data;
-    if (!sfcore::read_file(path, data)) {
+    std::string read_err;
+    if (!sfcore::read_file_capped(path, sfcore::kMaxDocBytes, data, read_err)) {
+      if (read_err == "file too large") {
+        sfcore::set_last_error("file exceeds 8 MiB limit");
+        return SF_E_FILE_TOO_LARGE;
+      }
       sfcore::set_last_error(std::string("open: cannot read '") + path + "'");
       return SF_E_NOT_FOUND;  // file missing vs read error — G0 collapses to NOT_FOUND
     }
@@ -429,6 +459,10 @@ void user_audit(sfcore::SfProject* proj, const char* action,
   std::string d = detail;
   if (d.size() > 512) d.resize(512);
   proj->doc.auditLog.push_back({now, "user", action, object_id, d});
+  // FIFO: drop oldest entries when the in-memory cap is exceeded.
+  while (proj->doc.auditLog.size() > sfcore::kMaxAuditEntries) {
+    proj->doc.auditLog.erase(proj->doc.auditLog.begin());
+  }
   proj->doc.project.modifiedAt = now;
 }
 

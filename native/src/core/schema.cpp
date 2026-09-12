@@ -3,6 +3,7 @@
 // required keys, types, UUID v4 format, RFC3339 timestamps, closed key set.
 #include "sf_internal.hpp"
 
+#include <functional>
 #include <string_view>
 
 namespace sfcore {
@@ -37,6 +38,16 @@ bool validate_doc_json(const json& j, std::string& errOut) {
     }
     if (nonEmpty && v.get<std::string>().empty()) {
       add(std::string(ctx) + ": '" + field + "' must be non-empty");
+    }
+  };
+  auto check_bool = [&](const json& obj, const char* field, const char* ctx) {
+    if (!obj.contains(field)) {
+      add(std::string(ctx) + ": missing '" + field + "'");
+      return;
+    }
+    const auto& v = obj[field];
+    if (!v.is_boolean()) {
+      add(std::string(ctx) + ": '" + field + "' must be a boolean");
     }
   };
   auto check_uuid = [&](const json& obj, const char* field, const char* ctx) {
@@ -177,6 +188,165 @@ bool validate_doc_json(const json& j, std::string& errOut) {
         add(std::string(ctx) + ": missing '" + f + "'");
       } else if (!g[f].is_array()) {
         add(std::string(ctx) + "." + f + ": must be an array");
+      }
+    }
+    // Collect node ids for edge/mixer reference checks.
+    std::set<std::string> node_ids;
+    if (g.contains("nodes") && g["nodes"].is_array()) {
+      int ni = 0;
+      for (const auto& n : g["nodes"]) {
+        const std::string nctx = std::string(ctx) + ".nodes[" + std::to_string(ni) + "]";
+        if (!n.is_object()) {
+          add(nctx + ": expected object");
+          ++ni;
+          continue;
+        }
+        if (!n.contains("kind")) {
+          add(nctx + ": missing 'kind'");
+        } else if (!n["kind"].is_string()) {
+          add(nctx + ": 'kind' must be a string");
+        } else {
+          const std::string kind = n["kind"].get<std::string>();
+          if (kind != "source" && kind != "processor" && kind != "output" && kind != "bus")
+            add(nctx + ": invalid kind '" + kind + "'");
+        }
+        if (!n.contains("id")) {
+          add(nctx + ": missing 'id'");
+        } else if (n["id"].is_string()) {
+          if (!is_uuid(n["id"].get<std::string>()))
+            add(nctx + ": invalid uuid '" + n["id"].get<std::string>() + "'");
+          node_ids.insert(n["id"].get<std::string>());
+        }
+        if (!n.contains("label")) {
+          add(nctx + ": missing 'label'");
+        } else if (!n["label"].is_string()) {
+          add(nctx + ": 'label' must be a string");
+        }
+        if (!n.contains("position")) {
+          add(nctx + ": missing 'position'");
+        } else if (!n["position"].is_object()) {
+          add(nctx + ".position: expected object");
+        } else {
+          const json& pos = n["position"];
+          for (const char* ax : {"x", "y"}) {
+            if (!pos.contains(ax)) {
+              add(nctx + ".position: missing '" + ax + "'");
+            } else if (!pos[ax].is_number()) {
+              add(nctx + ".position: '" + ax + "' must be a number");
+            }
+          }
+        }
+        if (!n.contains("mixer")) {
+          add(nctx + ": missing 'mixer'");
+        } else if (!n["mixer"].is_object()) {
+          add(nctx + ".mixer: expected object");
+        } else {
+          check_bool(n["mixer"], "mute", (nctx + ".mixer").c_str());
+          check_bool(n["mixer"], "solo", (nctx + ".mixer").c_str());
+        }
+        ++ni;
+      }
+    }
+    // Edges: from/to must reference existing nodes; detect cycles.
+    std::map<std::string, std::vector<std::string>> adj;
+    if (g.contains("edges") && g["edges"].is_array()) {
+      int ei = 0;
+      for (const auto& e : g["edges"]) {
+        const std::string ectx = std::string(ctx) + ".edges[" + std::to_string(ei) + "]";
+        if (!e.is_object()) {
+          add(ectx + ": expected object");
+          ++ei;
+          continue;
+        }
+        bool has_from = false, has_to = false;
+        std::string from, to;
+        if (!e.contains("from")) {
+          add(ectx + ": missing 'from'");
+        } else if (e["from"].is_string()) {
+          from = e["from"].get<std::string>();
+          has_from = true;
+          if (!is_uuid(from))
+            add(ectx + ": invalid uuid '" + from + "'");
+          else if (!node_ids.count(from))
+            add(ectx + ": 'from' references unknown node '" + from + "'");
+        } else {
+          add(ectx + ": 'from' must be a string");
+        }
+        if (!e.contains("to")) {
+          add(ectx + ": missing 'to'");
+        } else if (e["to"].is_string()) {
+          to = e["to"].get<std::string>();
+          has_to = true;
+          if (!is_uuid(to))
+            add(ectx + ": invalid uuid '" + to + "'");
+          else if (!node_ids.count(to))
+            add(ectx + ": 'to' references unknown node '" + to + "'");
+        } else {
+          add(ectx + ": 'to' must be a string");
+        }
+        if (!e.contains("label")) {
+          add(ectx + ": missing 'label'");
+        } else if (!e["label"].is_string()) {
+          add(ectx + ": 'label' must be a string");
+        }
+        if (has_from && has_to) adj[from].push_back(to);
+        ++ei;
+      }
+      // Directed cycle detection (DFS three-color).
+      std::map<std::string, int> color;  // 0=unvisited 1=in-progress 2=done
+      std::function<bool(const std::string&)> dfs = [&](const std::string& u) -> bool {
+        color[u] = 1;
+        for (const auto& v : adj[u]) {
+          if (color[v] == 1) return true;       // back edge -> cycle
+          if (color[v] == 0 && dfs(v)) return true;
+        }
+        color[u] = 2;
+        return false;
+      };
+      for (const auto& u : node_ids) {
+        if (color[u] == 0 && dfs(u)) {
+          add(std::string(ctx) + ": cycle detected in edges");
+          break;
+        }
+      }
+    }
+    // Mixers: nodeId must reference an existing node.
+    if (g.contains("mixers")) {
+      if (!g["mixers"].is_array()) {
+        add(std::string(ctx) + ".mixers: must be an array");
+      } else {
+        int mi = 0;
+        for (const auto& m : g["mixers"]) {
+          const std::string mctx = std::string(ctx) + ".mixers[" + std::to_string(mi) + "]";
+          if (!m.is_object()) {
+            add(mctx + ": expected object");
+            ++mi;
+            continue;
+          }
+          if (!m.contains("nodeId")) {
+            add(mctx + ": missing 'nodeId'");
+          } else if (m["nodeId"].is_string()) {
+            const std::string nid = m["nodeId"].get<std::string>();
+            if (!is_uuid(nid))
+              add(mctx + ": invalid uuid '" + nid + "'");
+            else if (!node_ids.count(nid))
+              add(mctx + ": 'nodeId' references unknown node '" + nid + "'");
+          } else {
+            add(mctx + ": 'nodeId' must be a string");
+          }
+          if (!m.contains("gains")) {
+            add(mctx + ": missing 'gains'");
+          } else if (!m["gains"].is_object()) {
+            add(mctx + ": 'gains' must be an object");
+          } else {
+            for (auto git = m["gains"].begin(); git != m["gains"].end(); ++git)
+              if (!git.value().is_number())
+                add(mctx + ".gains." + git.key() + " must be a number");
+          }
+          check_bool(m, "mute", mctx.c_str());
+          check_bool(m, "solo", mctx.c_str());
+          ++mi;
+        }
       }
     }
   };

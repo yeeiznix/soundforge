@@ -93,10 +93,19 @@
     },
     "signalGraph": {
       "type": "object",
-      "required": ["nodes", "edges"],
       "properties": {
-        "nodes": { "type": "array" },
-        "edges": { "type": "array" }
+        "nodes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/signalNode" }
+        },
+        "edges": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/signalEdge" }
+        },
+        "mixers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/signalMixerState" }
+        }
       }
     },
     "powerGraph": {
@@ -149,7 +158,21 @@
           "actor": { "type": "string" },
           "action": {
             "type": "string",
-            "enum": ["project.create", "project.open", "project.save", "project.migrate"]
+            "enum": [
+              "project.create",
+              "project.open",
+              "project.save",
+              "project.migrate",
+              "project.rename",
+              "venue.update",
+              "scene.update",
+              "graph.addNode",
+              "graph.removeNode",
+              "graph.addEdge",
+              "graph.removeEdge",
+              "graph.setMixer",
+              "graph.setPreset"
+            ]
           },
           "objectId": { "type": "string", "format": "uuid" },
           "detail": { "type": "string" }
@@ -158,6 +181,62 @@
     }
   },
   "$defs": {
+    "point2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      }
+    },
+    "signalNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "label", "position", "mixer"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["source", "processor", "output", "bus"]
+        },
+        "id": { "type": "string", "format": "uuid" },
+        "label": { "type": "string" },
+        "position": { "$ref": "#/$defs/point2" },
+        "mixer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mute", "solo"],
+          "properties": {
+            "mute": { "type": "boolean" },
+            "solo": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "signalEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to", "label"],
+      "properties": {
+        "from": { "type": "string", "format": "uuid" },
+        "to": { "type": "string", "format": "uuid" },
+        "label": { "type": "string" }
+      }
+    },
+    "signalMixerState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodeId", "gains", "mute", "solo"],
+      "properties": {
+        "nodeId": { "type": "string", "format": "uuid" },
+        "gains": {
+          "type": "object",
+          "additionalProperties": { "type": "number" }
+        },
+        "mute": { "type": "boolean" },
+        "solo": { "type": "boolean" }
+      }
+    },
     "point3": {
       "type": "object",
       "additionalProperties": false,
