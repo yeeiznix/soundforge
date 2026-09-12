@@ -6,8 +6,8 @@
 // The 12 exported functions (one per NativeBridge external fun) all use the
 // full symbol prefix Java_id_soundforge_pastudio_platform_bridge_NativeBridge_.
 // G0: synchronous calls; G2 introduces SfCommandQueue for audio-thread safety.
-// G1: 15 exported functions (12 + renameProject, setVenueDimensions,
-// setSceneGeometry) — one per NativeBridge external fun.
+// G1: 16 exported functions (12 + renameProject, renameVenue,
+// setVenueDimensions, setSceneGeometry) — one per NativeBridge external fun.
 #include <jni.h>
 #include <android/log.h>
 
@@ -131,6 +131,20 @@ Java_id_soundforge_pastudio_platform_bridge_NativeBridge_renameProject(JNIEnv* e
     return SF_E_INVALID_ARG;
   } catch (...) {
     log_boundary_exception(env, "renameProject", "unknown");
+    return SF_E_INVALID_ARG;
+  }
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_id_soundforge_pastudio_platform_bridge_NativeBridge_renameVenue(JNIEnv* env, jobject /*thiz*/,
+                                                                     jlong handle, jstring new_name) {
+  try {
+    return static_cast<jint>(sf_venue_rename(to_handle(handle), to_std(env, new_name).c_str()));
+  } catch (const std::exception& e) {
+    log_boundary_exception(env, "renameVenue", e.what());
+    return SF_E_INVALID_ARG;
+  } catch (...) {
+    log_boundary_exception(env, "renameVenue", "unknown");
     return SF_E_INVALID_ARG;
   }
 }

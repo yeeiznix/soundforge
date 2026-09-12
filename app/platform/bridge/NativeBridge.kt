@@ -5,7 +5,7 @@
 //
 // JNI_OnLoad (native side) installs a logcat log sink via sf_set_log_sink, so
 // every sf_log line appears under "SF/<tag>" with no Java-side callback.
-// 15 external funs below — their symbols use the full JNI prefix
+// 16 external funs below — their symbols use the full JNI prefix
 // Java_id_soundforge_pastudio_platform_bridge_NativeBridge_<name>.
 //
 // G0: synchronous calls; G2 introduces SfCommandQueue for audio-thread safety.
@@ -25,6 +25,7 @@ object NativeBridge {
     // Field-level project edits (PLAN_G1 §4.2). Return the SF_* result code;
     // map `!= SF_OK` to lastError(handle) read on the same thread.
     external fun renameProject(handle: Long, newName: String): Int
+    external fun renameVenue(handle: Long, newName: String): Int
     external fun setVenueDimensions(handle: Long, w: Double, d: Double, h: Double): Int
     external fun setSceneGeometry(handle: Long, cx: Double, cy: Double, cz: Double,
                                   lx: Double, ly: Double, lz: Double): Int

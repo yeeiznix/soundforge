@@ -142,7 +142,7 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
                 lastEditError = "No project is open"
                 return@launch
             }
-            if (NativeBridge.renameProject(handle, name) != SF_OK ||
+            if (NativeBridge.renameVenue(handle, name) != SF_OK ||
                 NativeBridge.setVenueDimensions(handle, widthM, depthM, heightM) != SF_OK
             ) {
                 lastEditError = NativeBridge.lastError(handle)

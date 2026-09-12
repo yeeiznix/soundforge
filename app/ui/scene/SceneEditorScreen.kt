@@ -101,6 +101,7 @@ fun SceneEditorScreen(
     // --- Document snapshot (loaded on entry / handle change) ----------------
     var scene by remember { mutableStateOf<SceneKt?>(null) }
     var venue by remember { mutableStateOf<VenueKt?>(null) }
+    var projectName by remember { mutableStateOf("") }
     var docError by remember { mutableStateOf<String?>(null) }
 
     fun reloadDocument() {
@@ -113,6 +114,10 @@ fun SceneEditorScreen(
         val root = runCatching { JSONObject(json) }.getOrNull()
         scene = root?.let { projectSceneOf(it) }
         venue = root?.let { projectVenueOf(it) }
+        // PLAN_G1 §6.2: the scene name field edits the PROJECT name
+        // (single-name model — project == one scene); seed from project.name,
+        // not the frozen scene.name, so renames survive document reloads.
+        projectName = root?.optJSONObject("project")?.optString("name") ?: ""
     }
 
     LaunchedEffect(projectHandle) { reloadDocument() }
@@ -128,8 +133,8 @@ fun SceneEditorScreen(
     var errorText by remember { mutableStateOf<String?>(null) }
     var venueExpanded by remember { mutableStateOf(false) }
 
-    LaunchedEffect(scene) {
-        sceneName = scene?.name ?: ""
+    LaunchedEffect(scene, projectName) {
+        sceneName = projectName.ifEmpty { scene?.name ?: "" }
         val c = scene?.center ?: Pt3(0.0, 0.0, 0.0)
         val l = scene?.listening ?: Pt3(0.0, 0.0, 0.0)
         cx = fmt(c.x); cy = fmt(c.y); cz = fmt(c.z)
@@ -156,7 +161,7 @@ fun SceneEditorScreen(
 
     fun commitName() {
         val name = sceneName.trim()
-        if (name.isEmpty() || name == scene?.name) return
+        if (name.isEmpty() || name == projectName) return
         errorText = null
         onRenameScene(name)
     }
@@ -164,7 +169,7 @@ fun SceneEditorScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(text = "Scene editor — ${scene?.name ?: "…"}") },
+                title = { Text(text = "Scene editor — ${projectName.ifEmpty { "…" }}") },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")

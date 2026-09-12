@@ -4,8 +4,17 @@
 #include "soundforge/sf_project.h"
 
 #include <chrono>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <thread>
+
+static std::string read_file(const char* path) {
+    std::ifstream f(path, std::ios::binary);
+    std::ostringstream oss;
+    oss << f.rdbuf();
+    return oss.str();
+}
 
 static std::string json_of(sf_project_t* p) {
     char* out = nullptr;
@@ -132,4 +141,38 @@ TEST(SceneVenue, RoundTripPreservesEdits) {
     EXPECT_NE(s.find("\"y\": 12.0"), std::string::npos);  // listening point preserved
     sf_project_destroy(p2);
     sf_free_string(json);
+}
+
+TEST(SceneVenue, HealthWarnsOnLegacyOutOfBoundsGeometry) {
+    // Legacy/hand-edited docs can carry scene geometry outside the venue box;
+    // the schema validator is structural only so they still open, and the
+    // health check reports a Warning (not Error) — PLAN_G1 §9.6.
+    std::string s = read_file(FIXTURES_DIR "/project_minimal_v2.json");
+    const std::string orig_center =
+        "      \"center\": {\n"
+        "        \"x\": 6.0,\n"
+        "        \"y\": 5.0,\n"
+        "        \"z\": 2.0\n"
+        "      },";
+    const std::string oob_center =
+        "      \"center\": {\n"
+        "        \"x\": 100.0,\n"
+        "        \"y\": 100.0,\n"
+        "        \"z\": 100.0\n"
+        "      },";
+    ASSERT_NE(s.find(orig_center), std::string::npos);
+    s.replace(s.find(orig_center), orig_center.size(), oob_center);
+
+    sf_project_t* p = nullptr;
+    EXPECT_EQ(sf_project_from_json(s.data(), s.size(), &p), SF_OK);  // still opens
+    ASSERT_NE(p, nullptr);
+
+    char buf[4096];
+    const sf_result_t rc = sf_project_health_check(p, buf, sizeof(buf));
+    const std::string r(buf);
+    EXPECT_EQ(rc, SF_E_SCHEMA);  // non-ok report return convention
+    EXPECT_NE(r.find("\"status\": \"warning\""), std::string::npos);
+    EXPECT_EQ(r.find("\"status\": \"error\""), std::string::npos);
+    EXPECT_NE(r.find("outside venue bounds"), std::string::npos);
+    sf_project_destroy(p);
 }

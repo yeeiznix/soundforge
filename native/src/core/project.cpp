@@ -354,6 +354,25 @@ extern "C" sf_result_t sf_project_health_check(const sf_project_t* p, char* repo
       }
     }
 
+    // G1: legacy or hand-edited docs may carry scene geometry outside the
+    // venue box. The schema validator is structural only, so such docs still
+    // open; surface a Warning (not Error) so they remain openable and can be
+    // repaired in the editor (PLAN_G1 §9.6). Mutators reject out-of-bounds
+    // writes, so this only fires for pre-existing documents.
+    if (sf_geo_validate_box(doc.venue.widthM, doc.venue.depthM, doc.venue.heightM) == SF_OK) {
+      int c_in = 0, l_in = 0;
+      const sf_result_t rc1 =
+          sf_geo_point_in_box(doc.scene.center.x, doc.scene.center.y, doc.scene.center.z,
+                              doc.venue.widthM, doc.venue.depthM, doc.venue.heightM, &c_in);
+      const sf_result_t rc2 =
+          sf_geo_point_in_box(doc.scene.listening.x, doc.scene.listening.y,
+                              doc.scene.listening.z, doc.venue.widthM, doc.venue.depthM,
+                              doc.venue.heightM, &l_in);
+      if (rc1 != SF_OK || rc2 != SF_OK || !c_in || !l_in) {
+        warnings.push_back("scene geometry outside venue bounds (legacy doc)");
+      }
+    }
+
     // Stats
     sfcore::json stats = sfcore::json::object();
     stats["audienceReceivers"] = doc.audienceReceivers.size();
