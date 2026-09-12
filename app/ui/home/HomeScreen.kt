@@ -40,7 +40,7 @@ private const val RECENT_LIMIT = 5
  */
 @Composable
 fun HomeScreen(
-    onCreateProject: (String) -> Unit,
+    onCreateProject: (String, String) -> Unit,
     onOpenProjectList: () -> Unit,
     openProjectName: String? = null,
 ) {
@@ -113,9 +113,9 @@ fun HomeScreen(
 
     if (showCreateDialog) {
         NewProjectDialog(
-            onConfirm = { name ->
+            onConfirm = { name, venuePreset ->
                 showCreateDialog = false
-                onCreateProject(name)
+                onCreateProject(name, venuePreset)
             },
             onDismiss = { showCreateDialog = false },
         )

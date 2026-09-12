@@ -17,6 +17,9 @@ sealed class Route(val path: String) {
     /** Scene editor placeholder. */
     object Scene : Route("scene")
 
+    /** Venue (room) editor — G1. */
+    object Venue : Route("venue")
+
     /** Signal editor placeholder. */
     object Signal : Route("signal")
 

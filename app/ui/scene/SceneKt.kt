@@ -9,6 +9,8 @@
 //   point3: { x, y, z }
 package id.soundforge.pastudio.scene
 
+import org.json.JSONObject
+
 /** A 3-D point in meters; shared by scene geometry and the venue editor. */
 data class Pt3(
     val x: Double,
@@ -23,4 +25,24 @@ data class SceneKt(
     val venueRef: String,
     val center: Pt3,
     val listening: Pt3,
+)
+
+/** Tolerant parse of the root project document's "scene" object. */
+fun projectSceneOf(root: JSONObject): SceneKt? = runCatching {
+    val scene = root.getJSONObject("scene")
+    val geo = scene.getJSONObject("geometry")
+    SceneKt(
+        id = scene.optString("id", ""),
+        name = scene.optString("name", ""),
+        venueRef = scene.optString("venueRef", ""),
+        center = point3Of(geo.getJSONObject("center")),
+        listening = point3Of(geo.getJSONObject("listening")),
+    )
+}.getOrNull()
+
+/** Tolerant parse of a point3 object (missing/invalid numbers -> 0.0). */
+fun point3Of(obj: JSONObject): Pt3 = Pt3(
+    x = obj.optDouble("x", 0.0),
+    y = obj.optDouble("y", 0.0),
+    z = obj.optDouble("z", 0.0),
 )

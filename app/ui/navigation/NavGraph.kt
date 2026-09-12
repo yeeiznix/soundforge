@@ -23,6 +23,7 @@ import id.soundforge.pastudio.reports.ReportsScreen
 import id.soundforge.pastudio.scene.SceneEditorScreen
 import id.soundforge.pastudio.signal.SignalEditorScreen
 import id.soundforge.pastudio.training.TrainingScreen
+import id.soundforge.pastudio.venue.VenueScreen
 
 /**
  * Root NavHost of the G0 shell. Start destination is the home dashboard.
@@ -52,12 +53,38 @@ fun SoundForgeNavGraph(navController: NavHostController = rememberNavController(
             )
         }
 
-        // The eight editor placeholders accept an optional "projectId" argument.
+        // G1: the scene/venue editors wire ProjectViewModel helpers through
+        // lambdas; other editor placeholders accept an optional "projectId".
         composable(
             route = Route.Scene.path + "?projectId={projectId}",
             arguments = listOf(projectIdArgument()),
         ) { entry ->
-            SceneEditorScreen(projectId = entry.arguments?.getString("projectId"))
+            SceneEditorScreen(
+                projectId = entry.arguments?.getString("projectId"),
+                projectHandle = projectViewModel.handle,
+                errorMessage = (uiState as? UiState.Error)?.message,
+                onEditVenue = { id ->
+                    navController.navigate("${Route.Venue.path}?projectId=${id.orEmpty()}")
+                },
+                onNavigateBack = { navController.popBackStack() },
+                onRenameScene = { projectViewModel.renameProject(it) },
+                onUpdateGeometry = { center, listening ->
+                    projectViewModel.updateSceneGeometry(center, listening)
+                },
+            )
+        }
+
+        composable(
+            route = Route.Venue.path + "?projectId={projectId}",
+            arguments = listOf(projectIdArgument()),
+        ) { entry ->
+            VenueScreen(
+                projectId = entry.arguments?.getString("projectId"),
+                projectHandle = projectViewModel.handle,
+                errorMessage = (uiState as? UiState.Error)?.message,
+                onUpdateVenue = { name, w, d, h -> projectViewModel.updateVenue(name, w, d, h) },
+                onNavigateBack = { navController.popBackStack() },
+            )
         }
 
         composable(

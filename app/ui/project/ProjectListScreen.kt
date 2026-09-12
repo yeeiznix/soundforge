@@ -119,9 +119,9 @@ fun ProjectListScreen(
 
     if (showCreateDialog) {
         NewProjectDialog(
-            onConfirm = { name ->
+            onConfirm = { name, venuePreset ->
                 showCreateDialog = false
-                viewModel.create(name)
+                viewModel.create(name, venuePreset)
                 onNavigateBack()
             },
             onDismiss = { showCreateDialog = false },

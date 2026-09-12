@@ -18,6 +18,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import id.soundforge.pastudio.scene.Pt3
+import id.soundforge.pastudio.scene.SceneKt
+import id.soundforge.pastudio.scene.projectSceneOf
+import id.soundforge.pastudio.venue.VenueKt
+import id.soundforge.pastudio.venue.projectVenueOf
 import org.json.JSONObject
 
 /** UI-facing state of the currently open project. */
@@ -26,7 +31,12 @@ sealed interface UiState {
     object Loading : UiState
 
     /** A native project handle is alive; [meta] mirrors the open document. */
-    data class Ready(val meta: ProjectMetaKt, val healthReport: String?) : UiState
+    data class Ready(
+        val meta: ProjectMetaKt,
+        val healthReport: String?,
+        val scene: SceneKt? = null,
+        val venue: VenueKt? = null,
+    ) : UiState
 
     /** The last create/open/save attempt failed; no usable handle. */
     data class Error(val message: String) : UiState
@@ -42,6 +52,20 @@ data class ProjectMetaKt(
     val engineVersion: String,
 )
 
+/** SF_OK (sf_types.h). The bridge mutators return SF_* codes. */
+private val SF_OK = 0
+
+/**
+ * Built-in venue presets -> default room dimensions (meters), PLAN_G1 §6.4.
+ * "Small Club" mirrors the engine defaults (SF_ROOM_DEFAULT_*); the larger
+ * presets pick representative rooms. Keys must match NewProjectDialog.
+ */
+val BuiltInVenuePresetDims: Map<String, Triple<Double, Double, Double>> = mapOf(
+    "Small Club" to Triple(12.0, 10.0, 4.0),
+    "Warehouse" to Triple(24.0, 18.0, 6.0),
+    "Theater" to Triple(30.0, 20.0, 10.0),
+)
+
 class ProjectViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repo = FileStorageRepository(File(application.filesDir))
@@ -50,13 +74,16 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
     var handle: Long = 0L
         private set
 
+    /** Last native error from an edit helper (read after a failed commit). */
+    var lastEditError: String? = null
+
     private val _state = MutableStateFlow<UiState>(UiState.Loading)
 
     /** Observable UI state. */
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     /** Create a new native project and adopt its handle. */
-    fun create(name: String) {
+    fun create(name: String, venuePreset: String = "") {
         viewModelScope.launch(Dispatchers.IO) {
             _state.value = UiState.Loading
             val newHandle = NativeBridge.projectCreate(name, null)
@@ -65,9 +92,86 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
                 return@launch
             }
             handle = newHandle
+            persistVenuePreset(newHandle, name, venuePreset)
             _state.value = readyState(newHandle, fallbackName = name)
         }
     }
+
+    /**
+     * The venue preset chosen at creation is written straight into the new
+     * document (PLAN_G1 §6.4): named presets drive the room dimensions,
+     * free-form names keep the engine defaults. Failed edits leave the handle
+     * valid; the Ready state refresh surfaces the native error.
+     */
+    private fun persistVenuePreset(newHandle: Long, name: String, venuePreset: String) {
+        if (NativeBridge.renameProject(newHandle, name) != SF_OK) return
+        val dims = BuiltInVenuePresetDims[venuePreset]
+        if (dims != null) {
+            NativeBridge.setVenueDimensions(newHandle, dims.first, dims.second, dims.third)
+        }
+    }
+
+    /** Field-level scene geometry edit (PLAN_G1 §4.2/§6.4). Failed edits keep
+     *  the handle valid; the native error message is exposed via [lastEditError]
+     *  (and the UI state rolls back to the last committed document). */
+    fun updateSceneGeometry(center: Pt3, listening: Pt3) {
+        lastEditError = null
+        viewModelScope.launch(Dispatchers.IO) {
+            if (handle == 0L) {
+                lastEditError = "No project is open"
+                return@launch
+            }
+            if (NativeBridge.setSceneGeometry(
+                    handle, center.x, center.y, center.z,
+                    listening.x, listening.y, listening.z,
+                ) != SF_OK
+            ) {
+                lastEditError = NativeBridge.lastError(handle)
+                _state.value = UiState.Error(lastEditError ?: "Scene update failed")
+                return@launch
+            }
+            _state.value = readyState(handle, fallbackName = currentName())
+        }
+    }
+
+    /** Field-level venue edit (name or dimensions). See [updateSceneGeometry]. */
+    fun updateVenue(name: String, widthM: Double, depthM: Double, heightM: Double) {
+        lastEditError = null
+        viewModelScope.launch(Dispatchers.IO) {
+            if (handle == 0L) {
+                lastEditError = "No project is open"
+                return@launch
+            }
+            if (NativeBridge.renameProject(handle, name) != SF_OK ||
+                NativeBridge.setVenueDimensions(handle, widthM, depthM, heightM) != SF_OK
+            ) {
+                lastEditError = NativeBridge.lastError(handle)
+                _state.value = UiState.Error(lastEditError ?: "Venue update failed")
+                return@launch
+            }
+            _state.value = readyState(handle, fallbackName = name)
+        }
+    }
+
+    /** Field-level project rename (plan §6.2 scene name commit). */
+    fun renameProject(name: String) {
+        lastEditError = null
+        viewModelScope.launch(Dispatchers.IO) {
+            if (handle == 0L) {
+                lastEditError = "No project is open"
+                return@launch
+            }
+            if (NativeBridge.renameProject(handle, name) != SF_OK) {
+                lastEditError = NativeBridge.lastError(handle)
+                _state.value = UiState.Error(lastEditError ?: "Rename failed")
+                return@launch
+            }
+            _state.value = readyState(handle, fallbackName = name)
+        }
+    }
+
+    private fun currentName(): String =
+        (_state.value as? UiState.Ready)?.meta?.name ?: "Untitled"
 
     /** Open a project document: repo read + NativeBridge.projectFromJson. */
     fun openFromPath(path: String) {
@@ -107,6 +211,8 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
                         meta = previous?.meta?.copy(modifiedAt = isoNow())
                             ?: parseMeta(json, File(path).nameWithoutExtension),
                         healthReport = previous?.healthReport,
+                        scene = previous?.scene,
+                        venue = previous?.venue,
                     )
                 }
                 .onFailure { error ->
@@ -147,7 +253,13 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
         val health = runCatching { NativeBridge.healthCheck(nativeHandle) }
             .getOrNull()
             ?.takeIf { it.isNotBlank() }
-        return UiState.Ready(meta, health)
+        val root = if (json.isEmpty()) null else runCatching { JSONObject(json) }.getOrNull()
+        return UiState.Ready(
+            meta = meta,
+            healthReport = health,
+            scene = root?.let { projectSceneOf(it) },
+            venue = root?.let { projectVenueOf(it) },
+        )
     }
 
     /** Tolerant org.json parse of the projectToJson document. */

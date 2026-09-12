@@ -20,19 +20,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
-/** Venue presets offered at project creation (G0: captured, not persisted yet). */
+/** Venue presets offered at project creation (G1: persisted via create). */
 private val VenuePresets = listOf("Small Club", "Warehouse", "Theater")
 
 /**
  * Modal dialog for creating a project.
  *
- * [onConfirm] receives the trimmed project name; the selected venue preset is
- * G0 UI-only state (a later milestone persists it into the project document).
+ * [onConfirm] receives the trimmed project name plus the selected venue
+ * preset (G1: persisted into the project document via ProjectViewModel.create;
+ * the preset drives the room dimensions, defaults otherwise).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NewProjectDialog(
-    onConfirm: (String) -> Unit,
+    onConfirm: (String, String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var name by remember { mutableStateOf("") }
@@ -82,7 +83,7 @@ fun NewProjectDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { onConfirm(name.trim()) },
+                onClick = { onConfirm(name.trim(), venue) },
                 enabled = name.isNotBlank(),
             ) { Text(text = "Confirm") }
         },

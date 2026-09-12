@@ -10,6 +10,7 @@
 package id.soundforge.pastudio.venue
 
 import id.soundforge.pastudio.scene.Pt3
+import org.json.JSONObject
 
 /** Read-only venue snapshot (the project has exactly one venue in v2). */
 data class VenueKt(
@@ -25,3 +26,16 @@ fun Pt3.withinRoomsOf(room: VenueKt): Boolean =
     x >= 0.0 && x <= room.widthM &&
         y >= 0.0 && y <= room.depthM &&
         z >= 0.0 && z <= room.heightM
+
+/** Tolerant parse of the root project document's "venue" object. */
+fun projectVenueOf(root: JSONObject): VenueKt? = runCatching {
+    val venue = root.getJSONObject("venue")
+    val dims = venue.getJSONObject("dimensions")
+    VenueKt(
+        id = venue.optString("id", ""),
+        name = venue.optString("name", ""),
+        widthM = dims.optDouble("widthM", 0.0),
+        depthM = dims.optDouble("depthM", 0.0),
+        heightM = dims.optDouble("heightM", 0.0),
+    )
+}.getOrNull()
