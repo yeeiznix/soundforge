@@ -5,6 +5,7 @@ set(SFCORE_SOURCES
     version.cpp
     uuid.cpp
     diagnostics.cpp
+    geometry.cpp
     schema.cpp
     json_codec.cpp
     migration.cpp
