@@ -68,7 +68,7 @@ TEST_F(ProjectIoTest, MigrationViaFile) {
     sf_project_t* p = nullptr;
     EXPECT_EQ(sf_project_open_from_path(path.c_str(), &p), SF_OK);
     ASSERT_NE(p, nullptr);
-    EXPECT_EQ(sf_project_get_schema_version(p), 1);
+    EXPECT_EQ(sf_project_get_schema_version(p), 2);
     sf_project_destroy(p);
 
     std::filesystem::path bak = path;

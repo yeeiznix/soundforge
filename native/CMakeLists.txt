@@ -6,8 +6,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# Version stamp (default; CI may override with -DSF_BUILD_VERSION="0.1.0-g0+build.123")
-set(SF_BUILD_VERSION "0.1.0-g0" CACHE STRING "Engine version string")
+# Version stamp (default; CI may override with -DSF_BUILD_VERSION="0.1.0-g1+build.123")
+set(SF_BUILD_VERSION "0.1.0-g1" CACHE STRING "Engine version string")
 
 option(SF_BUILD_TESTS "Build native unit/integration tests" ON)
 

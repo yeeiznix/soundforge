@@ -100,19 +100,70 @@ bool validate_doc_json(const json& j, std::string& errOut) {
     }
   }
 
-  // venue / scene
-  auto check_stub = [&](const json& o, const char* ctx) {
+  // venue / scene (schema v2: venue.dimensions, scene.geometry)
+  auto check_point3 = [&](const json& o, const char* ctx) {
     if (!o.is_object()) {
       add(std::string(ctx) + ": expected object");
       return;
     }
-    check_uuid(o, "id", ctx);
-    check_str(o, "name", ctx, false);
+    for (const char* ax : {"x", "y", "z"}) {
+      if (!o.contains(ax)) {
+        add(std::string(ctx) + ": missing '" + ax + "'");
+      } else if (!o[ax].is_number()) {
+        add(std::string(ctx) + ": '" + ax + "' must be a number");
+      }
+    }
   };
-  if (j.contains("venue")) check_stub(j["venue"], "venue");
+  auto check_positive = [&](const json& o, const char* field, const char* ctx) {
+    if (!o.contains(field)) {
+      add(std::string(ctx) + ": missing '" + field + "'");
+    } else if (!o[field].is_number()) {
+      add(std::string(ctx) + ": '" + field + "' must be a number");
+    } else if (o[field].get<double>() <= 0.0) {
+      add(std::string(ctx) + ": '" + field + "' must be > 0");
+    }
+  };
+  if (j.contains("venue")) {
+    const json& v = j["venue"];
+    if (!v.is_object()) {
+      add("venue: expected object");
+    } else {
+      check_uuid(v, "id", "venue");
+      check_str(v, "name", "venue", false);
+      if (!v.contains("dimensions")) {
+        add("venue: missing 'dimensions'");
+      } else if (!v["dimensions"].is_object()) {
+        add("venue.dimensions: expected object");
+      } else {
+        check_positive(v["dimensions"], "widthM", "venue.dimensions");
+        check_positive(v["dimensions"], "depthM", "venue.dimensions");
+        check_positive(v["dimensions"], "heightM", "venue.dimensions");
+      }
+    }
+  }
   if (j.contains("scene")) {
-    check_stub(j["scene"], "scene");
-    if (j["scene"].is_object()) check_uuid(j["scene"], "venueRef", "scene");
+    const json& s = j["scene"];
+    if (!s.is_object()) {
+      add("scene: expected object");
+    } else {
+      check_uuid(s, "id", "scene");
+      check_str(s, "name", "scene", false);
+      check_uuid(s, "venueRef", "scene");
+      if (!s.contains("geometry")) {
+        add("scene: missing 'geometry'");
+      } else if (!s["geometry"].is_object()) {
+        add("scene.geometry: expected object");
+      } else {
+        const json& g = s["geometry"];
+        for (const char* pt : {"center", "listening"}) {
+          if (!g.contains(pt)) {
+            add(std::string("scene.geometry: missing '") + pt + "'");
+          } else {
+            check_point3(g[pt], (std::string("scene.geometry.") + pt).c_str());
+          }
+        }
+      }
+    }
   }
 
   // graphs

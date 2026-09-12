@@ -1,6 +1,8 @@
-// SoundForge G0 — schema migration (§5.5).
-// G0 path: 0→1, idempotent, injects defaults for missing canonical keys,
-// ensures envelope shape, appends a project.migrate audit entry.
+// SoundForge G1 — stepwise schema migration (PLAN_G0 §5.5, PLAN_G1 P2).
+// Chain: 0→1→2, idempotent per step, injects defaults for missing canonical
+// keys, ensures envelope shape, appends one project.migrate audit entry per
+// step. The v1→v2 step adds venue.dimensions and scene.geometry with room
+// defaults. Python mirror: python/soundforge_py/migrate.py (lockstep).
 #include "sf_internal.hpp"
 
 #include <cstring>
@@ -33,23 +35,24 @@ const char* singular_for(const std::string& key) {
   return "equipment";
 }
 
-}  // namespace
+// Appends one project.migrate audit entry describing a completed step.
+void append_migrate_audit(json& j, int32_t from, int32_t to) {
+  json a = json::object();
+  a["ts"] = now_iso8601();
+  a["actor"] = "system";
+  a["action"] = "project.migrate";
+  a["objectId"] = j["project"]["id"];
+  a["detail"] = "migrated " + std::to_string(from) + "->" + std::to_string(to);
+  if (!j["auditLog"].is_array()) j["auditLog"] = json::array();
+  j["auditLog"].push_back(a);
+}
 
-sf_result_t migrate_doc_inplace(json& j, int32_t from_ver, int32_t to_ver, std::string& err) {
-  if (!j.is_object()) {
-    err = "root: expected JSON object";
-    return SF_E_SCHEMA;
-  }
-  if (from_ver == to_ver) return SF_OK;  // no-op
-  if (to_ver < from_ver) {
-    err = "downgrade not supported";
-    return SF_E_VERSION;
-  }
+// One migration step: from version `from` to `from + 1`.
+sf_result_t migrate_step(json& j, int32_t from, std::string& err) {
+  const int32_t to = from + 1;
+  if (peek_schema_version(j) >= to) return SF_OK;  // idempotent per step
 
-  if (from_ver == 0 && to_ver == 1) {
-    const int current = peek_schema_version(j);
-    if (current >= 1) return SF_OK;  // idempotent — already migrated
-
+  if (from == 0) {
     j["schemaVersion"] = 1;
     j["engineVersion"] = sf_engine_version();  // engine that performed migration
 
@@ -123,21 +126,106 @@ sf_result_t migrate_doc_inplace(json& j, int32_t from_ver, int32_t to_ver, std::
     if (!scene.contains("venueRef") || !is_uuid(scene.value("venueRef", "")))
       scene["venueRef"] = venue["id"];
 
-    // Audit entry.
-    json a = json::object();
-    a["ts"] = now_iso8601();
-    a["actor"] = "system";
-    a["action"] = "project.migrate";
-    a["objectId"] = j["project"]["id"];
-    a["detail"] = "migrated 0->1";
-    if (!j["auditLog"].is_array()) j["auditLog"] = json::array();
-    j["auditLog"].push_back(a);
-
+    append_migrate_audit(j, 0, 1);
     return SF_OK;
   }
 
-  err = "no migration path from " + std::to_string(from_ver) + " to " + std::to_string(to_ver);
+  if (from == 1) {
+    j["schemaVersion"] = 2;
+    j["engineVersion"] = sf_engine_version();
+
+    // venue.dimensions — inject room defaults unless already positive.
+    json& venue = j["venue"];
+    if (!venue.is_object()) venue = json::object();
+    double room[3] = {SF_ROOM_DEFAULT_W, SF_ROOM_DEFAULT_D, SF_ROOM_DEFAULT_H};
+    if (!venue.contains("dimensions") || !venue["dimensions"].is_object()) {
+      json d = json::object();
+      d["widthM"] = SF_ROOM_DEFAULT_W;
+      d["depthM"] = SF_ROOM_DEFAULT_D;
+      d["heightM"] = SF_ROOM_DEFAULT_H;
+      venue["dimensions"] = d;
+    } else {
+      const json& dims = venue["dimensions"];
+      const char* keys[3] = {"widthM", "depthM", "heightM"};
+      bool ok = true;
+      for (int i = 0; i < 3; ++i) {
+        if (!dims.contains(keys[i]) || !dims[keys[i]].is_number() ||
+            dims[keys[i]].get<double>() <= 0.0) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) {
+        for (int i = 0; i < 3; ++i) room[i] = dims[keys[i]].get<double>();
+      } else {
+        json d = json::object();
+        d["widthM"] = SF_ROOM_DEFAULT_W;
+        d["depthM"] = SF_ROOM_DEFAULT_D;
+        d["heightM"] = SF_ROOM_DEFAULT_H;
+        venue["dimensions"] = d;
+      }
+    }
+
+    // scene.geometry — center/listening at room middle unless already valid.
+    auto room_mid_point = [&room]() {
+      json p = json::object();
+      p["x"] = room[0] / 2.0;
+      p["y"] = room[1] / 2.0;
+      p["z"] = room[2] / 2.0;
+      return p;
+    };
+    json& scene = j["scene"];
+    if (!scene.is_object()) scene = json::object();
+    bool geo_ok = scene.contains("geometry") && scene["geometry"].is_object();
+    if (geo_ok) {
+      const json& geo = scene["geometry"];
+      for (const char* pt : {"center", "listening"}) {
+        if (!geo.contains(pt) || !geo[pt].is_object()) {
+          geo_ok = false;
+          break;
+        }
+        const json& p = geo[pt];
+        for (const char* ax : {"x", "y", "z"}) {
+          if (!p.contains(ax) || !p[ax].is_number()) {
+            geo_ok = false;
+            break;
+          }
+        }
+        if (!geo_ok) break;
+      }
+    }
+    if (!geo_ok) {
+      json g = json::object();
+      g["center"] = room_mid_point();
+      g["listening"] = room_mid_point();
+      scene["geometry"] = g;
+    }
+
+    append_migrate_audit(j, 1, 2);
+    return SF_OK;
+  }
+
+  err = "no migration path from " + std::to_string(from) + " to " + std::to_string(to);
   return SF_E_VERSION;
+}
+
+}  // namespace
+
+sf_result_t migrate_doc_inplace(json& j, int32_t from_ver, int32_t to_ver, std::string& err) {
+  if (!j.is_object()) {
+    err = "root: expected JSON object";
+    return SF_E_SCHEMA;
+  }
+  if (from_ver == to_ver) return SF_OK;  // no-op
+  if (to_ver < from_ver) {
+    err = "downgrade not supported";
+    return SF_E_VERSION;
+  }
+  for (int32_t v = from_ver; v < to_ver; ++v) {
+    const sf_result_t rc = migrate_step(j, v, err);
+    if (rc != SF_OK) return rc;
+  }
+  return SF_OK;
 }
 
 }  // namespace sfcore

@@ -13,7 +13,11 @@ from datetime import datetime, timezone
 
 # Mirrors sf_engine_version() / SF_VERSION_STRING (sf_version.h): the engine
 # version stamped into documents that this code migrates.
-ENGINE_VERSION = "0.1.0-g0"
+ENGINE_VERSION = "0.1.0-g1"
+
+# Room defaults for schema v2 — mirrors SF_ROOM_DEFAULT_* (sf_internal.hpp and
+# migration.cpp, step 1->2). MUST stay in lockstep with the native side.
+_ROOM_DEFAULT_W, _ROOM_DEFAULT_D, _ROOM_DEFAULT_H = 12.0, 10.0, 4.0
 
 # (collection key, envelope type) — mirrors collections() in sf_internal.hpp.
 _COLLECTIONS: list[tuple[str, str]] = [
@@ -153,24 +157,63 @@ def _singular_for(key: str) -> str:
     return "equipment"
 
 
-def migrate_json(data: dict, from_ver: int, to_ver: int) -> dict:
-    """Migrate a project document in place (and return it).
+def _valid_point3(p) -> bool:
+    return (
+        isinstance(p, dict)
+        and all(
+            isinstance(p.get(k), (int, float)) and not isinstance(p.get(k), bool)
+            for k in ("x", "y", "z")
+        )
+    )
 
-    Mirrors ``migrate_doc_inplace``. Idempotent when the document is already
-    at the target version. Raises ``ValueError`` for non-object roots,
-    downgrades, and unsupported version paths.
-    """
-    if not isinstance(data, dict):
-        raise ValueError("root: expected JSON object")
-    if from_ver == to_ver:
-        return data  # no-op
-    if to_ver < from_ver:
-        raise ValueError("downgrade not supported")
 
-    if from_ver == 0 and to_ver == 1:
-        if _peek_schema_version(data) >= 1:
-            return data  # idempotent — already migrated
+def _ensure_room_defaults(data: dict) -> None:
+    """Inject venue.dimensions / scene.geometry (mirrors C++ step 1->2)."""
+    venue = data.get("venue")
+    if not isinstance(venue, dict):
+        venue = {}
+        data["venue"] = venue
+    room = [_ROOM_DEFAULT_W, _ROOM_DEFAULT_D, _ROOM_DEFAULT_H]
+    dims = venue.get("dimensions")
+    if isinstance(dims, dict):
+        ok = True
+        for i, key in enumerate(("widthM", "depthM", "heightM")):
+            v = dims.get(key)
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+                ok = False
+                break
+            room[i] = float(v)
+        if not ok:
+            dims = None
+    if not isinstance(dims, dict):
+        venue["dimensions"] = {
+            "widthM": _ROOM_DEFAULT_W,
+            "depthM": _ROOM_DEFAULT_D,
+            "heightM": _ROOM_DEFAULT_H,
+        }
+    scene = data.get("scene")
+    if not isinstance(scene, dict):
+        scene = {}
+        data["scene"] = scene
+    geo = scene.get("geometry")
+    if not (
+        isinstance(geo, dict)
+        and _valid_point3(geo.get("center"))
+        and _valid_point3(geo.get("listening"))
+    ):
+        scene["geometry"] = {
+            "center": {"x": room[0] / 2.0, "y": room[1] / 2.0, "z": room[2] / 2.0},
+            "listening": {"x": room[0] / 2.0, "y": room[1] / 2.0, "z": room[2] / 2.0},
+        }
 
+
+def _migrate_step(data: dict, from_ver: int) -> None:
+    """One migration step (from_ver -> from_ver + 1); idempotent per step."""
+    to = from_ver + 1
+    if _peek_schema_version(data) >= to:
+        return  # idempotent — already at/past this step
+
+    if from_ver == 0:
         data["schemaVersion"] = 1
         data["engineVersion"] = ENGINE_VERSION  # engine that performed migration
 
@@ -271,6 +314,41 @@ def migrate_json(data: dict, from_ver: int, to_ver: int) -> dict:
             data["auditLog"] = []
         data["auditLog"].append(entry)
 
-        return data
+        return
 
-    raise ValueError(f"no migration path from {from_ver} to {to_ver}")
+    if from_ver == 1:
+        data["schemaVersion"] = 2
+        data["engineVersion"] = ENGINE_VERSION  # engine that performed migration
+        _ensure_room_defaults(data)
+        entry = {
+            "ts": _now_iso8601(),
+            "actor": "system",
+            "action": "project.migrate",
+            "objectId": data["project"]["id"],
+            "detail": "migrated 1->2",
+        }
+        if not isinstance(data["auditLog"], list):
+            data["auditLog"] = []
+        data["auditLog"].append(entry)
+        return
+
+    raise ValueError(f"no migration path from {from_ver} to {to}")
+
+
+def migrate_json(data: dict, from_ver: int, to_ver: int) -> dict:
+    """Migrate a project document in place (and return it).
+
+    Mirrors ``migrate_doc_inplace``: walks from_ver -> to_ver one version at a
+    time. Idempotent when the document is already at the target version.
+    Raises ``ValueError`` for non-object roots, downgrades, and unsupported
+    version paths.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("root: expected JSON object")
+    if from_ver == to_ver:
+        return data  # no-op
+    if to_ver < from_ver:
+        raise ValueError("downgrade not supported")
+    for v in range(from_ver, to_ver):
+        _migrate_step(data, v)
+    return data

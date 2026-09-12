@@ -19,7 +19,7 @@ TEST(ProjectSerialize, RoundTripPreservesId) {
     EXPECT_EQ(sf_project_from_json(json, len, &p2), SF_OK);
     ASSERT_NE(p2, nullptr);
     EXPECT_EQ(sf_project_get_id(p2), id0);
-    EXPECT_EQ(sf_project_get_schema_version(p2), 1);
+    EXPECT_EQ(sf_project_get_schema_version(p2), 2);
     sf_project_destroy(p2);
     sf_free_string(json);
 }

@@ -6,7 +6,7 @@ schema-validation wrapper, the Python mirror of the C++ migrator, and
 placeholder namespaces for future import/reference/regression tooling.
 """
 
-__version__ = "0.1.0-g0"
+__version__ = "0.1.0-g1"
 
 # Current canonical schema version (mirrors SF_SCHEMA_VERSION, sf_version.h).
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2

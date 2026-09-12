@@ -12,8 +12,8 @@ extern "C" {
 #define SF_ENGINE_VERSION_MAJOR 0
 #define SF_ENGINE_VERSION_MINOR 1
 #define SF_ENGINE_VERSION_PATCH 0
-#define SF_ENGINE_VERSION_SUFFIX "-g0"
-#define SF_SCHEMA_VERSION 1
+#define SF_ENGINE_VERSION_SUFFIX "-g1"
+#define SF_SCHEMA_VERSION 2
 
 /* Default engine version string derived from the components above.
    The compiled-in stamp (version_gen.h) may override via -DSF_BUILD_VERSION. */
@@ -23,7 +23,7 @@ extern "C" {
   SF_STR(SF_ENGINE_VERSION_MAJOR) "." SF_STR(SF_ENGINE_VERSION_MINOR) "." \
   SF_STR(SF_ENGINE_VERSION_PATCH) SF_ENGINE_VERSION_SUFFIX
 
-/* Static string, e.g. "0.1.0-g0" (build stamp via CMake version_gen.h). */
+/* Static string, e.g. "0.1.0-g1" (build stamp via CMake version_gen.h). */
 const char* sf_engine_version(void);
 
 /* Current canonical schema version, e.g. 1. */

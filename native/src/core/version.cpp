@@ -4,7 +4,7 @@
 #if __has_include("version_gen.h")
 #include "version_gen.h"
 #else
-#define SF_VERSION_STRING "0.1.0-g0"
+#define SF_VERSION_STRING "0.1.0-g1"
 #endif
 
 extern "C" const char* sf_engine_version(void) { return SF_VERSION_STRING; }

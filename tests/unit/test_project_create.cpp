@@ -13,7 +13,7 @@ TEST(ProjectCreate, BasicFields) {
     std::string id = sf_project_get_id(p);
     static const std::regex uuid_re("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
     EXPECT_TRUE(std::regex_match(id, uuid_re));
-    EXPECT_EQ(sf_project_get_schema_version(p), 1);
+    EXPECT_EQ(sf_project_get_schema_version(p), 2);
     EXPECT_STREQ(sf_project_get_engine_version(p), SF_ENGINE_VERSION);
     sf_project_destroy(p);
 }

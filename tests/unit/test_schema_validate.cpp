@@ -16,15 +16,15 @@ static std::string read_file(const char* path) {
     return oss.str();
 }
 
-TEST(SchemaValidate, MinimalV1Passes) {
-    std::string s = read_file(FIXTURES_DIR "/project_minimal_v1.json");
+TEST(SchemaValidate, MinimalV2Passes) {
+    std::string s = read_file(FIXTURES_DIR "/project_minimal_v2.json");
     char err[512] = {0};
     EXPECT_EQ(sf_validate_project_json(s.data(), s.size(), err, sizeof(err)), SF_OK)
         << "err=" << err;
 }
 
-TEST(SchemaValidate, FullEmptyV1Passes) {
-    std::string s = read_file(FIXTURES_DIR "/project_full_empty_v1.json");
+TEST(SchemaValidate, FullEmptyV2Passes) {
+    std::string s = read_file(FIXTURES_DIR "/project_full_empty_v2.json");
     char err[512] = {0};
     EXPECT_EQ(sf_validate_project_json(s.data(), s.size(), err, sizeof(err)), SF_OK)
         << "err=" << err;

@@ -96,11 +96,19 @@ extern "C" sf_project_t* sf_project_create(const char* name, const char* author)
     p->doc.venue = {
         sfcore::uuid_generate(),
         "Untitled Venue",
+        sfcore::SF_ROOM_DEFAULT_W,
+        sfcore::SF_ROOM_DEFAULT_D,
+        sfcore::SF_ROOM_DEFAULT_H,
     };
+    const double cw = sfcore::SF_ROOM_DEFAULT_W / 2.0;
+    const double cd = sfcore::SF_ROOM_DEFAULT_D / 2.0;
+    const double ch = sfcore::SF_ROOM_DEFAULT_H / 2.0;
     p->doc.scene = {
         sfcore::uuid_generate(),
         "Default Scene",
         p->doc.venue.id,
+        {cw, cd, ch},
+        {cw, cd, ch},
     };
     p->doc.auditLog.push_back({
         now,

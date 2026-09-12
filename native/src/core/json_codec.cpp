@@ -81,12 +81,28 @@ json doc_to_json(const SfProjectDoc& d) {
   json v = json::object();
   v["id"] = d.venue.id;
   v["name"] = d.venue.name;
+  json dims = json::object();
+  dims["widthM"] = d.venue.widthM;
+  dims["depthM"] = d.venue.depthM;
+  dims["heightM"] = d.venue.heightM;
+  v["dimensions"] = dims;
   j["venue"] = v;
 
   json sc = json::object();
   sc["id"] = d.scene.id;
   sc["name"] = d.scene.name;
   sc["venueRef"] = d.scene.venueRef;
+  auto point3 = [](const Point3& pt) {
+    json p = json::object();
+    p["x"] = pt.x;
+    p["y"] = pt.y;
+    p["z"] = pt.z;
+    return p;
+  };
+  json geo = json::object();
+  geo["center"] = point3(d.scene.center);
+  geo["listening"] = point3(d.scene.listening);
+  sc["geometry"] = geo;
   j["scene"] = sc;
 
   auto envelopes = [](const std::vector<ObjectEnvelope>& vec) {
@@ -143,14 +159,38 @@ bool doc_from_json(const json& j, SfProjectDoc& out, std::string& err) {
   out.project.author = get_str(pr, "author", "");
   out.project.notes = get_str(pr, "notes", "");
 
+  auto get_num = [](const json& o, const char* k, double def) {
+    return (o.contains(k) && o[k].is_number()) ? o[k].get<double>() : def;
+  };
+  auto get_point3 = [&get_num](const json& o) {
+    Point3 pt;
+    pt.x = get_num(o, "x", 0.0);
+    pt.y = get_num(o, "y", 0.0);
+    pt.z = get_num(o, "z", 0.0);
+    return pt;
+  };
+
   if (j.contains("venue") && j["venue"].is_object()) {
     out.venue.id = get_str(j["venue"], "id", "");
     out.venue.name = get_str(j["venue"], "name", "");
+    if (j["venue"].contains("dimensions") && j["venue"]["dimensions"].is_object()) {
+      const json& dims = j["venue"]["dimensions"];
+      out.venue.widthM = get_num(dims, "widthM", 0.0);
+      out.venue.depthM = get_num(dims, "depthM", 0.0);
+      out.venue.heightM = get_num(dims, "heightM", 0.0);
+    }
   }
   if (j.contains("scene") && j["scene"].is_object()) {
     out.scene.id = get_str(j["scene"], "id", "");
     out.scene.name = get_str(j["scene"], "name", "");
     out.scene.venueRef = get_str(j["scene"], "venueRef", "");
+    if (j["scene"].contains("geometry") && j["scene"]["geometry"].is_object()) {
+      const json& geo = j["scene"]["geometry"];
+      if (geo.contains("center") && geo["center"].is_object())
+        out.scene.center = get_point3(geo["center"]);
+      if (geo.contains("listening") && geo["listening"].is_object())
+        out.scene.listening = get_point3(geo["listening"]);
+    }
   }
 
   if (j.contains("signalGraph") && j["signalGraph"].is_object()) out.signalGraph = j["signalGraph"];

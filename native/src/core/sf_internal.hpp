@@ -78,13 +78,31 @@ struct ProjectMeta {
 struct VenueStub {
   Uuid id;
   std::string name;
+  double widthM = 0.0;   // v2: room dimensions (meters), >0 when healthy
+  double depthM = 0.0;
+  double heightM = 0.0;
+};
+
+struct Point3 {
+  double x = 0.0;
+  double y = 0.0;
+  double z = 0.0;
 };
 
 struct SceneStub {
   Uuid id;
   std::string name;
   Uuid venueRef;
+  Point3 center;     // v2: room-local meters, origin at front-left floor corner
+  Point3 listening;  // v2: preferred listening position, same frame
 };
+
+// G1 room defaults — schema v2 venue.dimensions / scene.geometry (PLAN_G1 P2).
+// Migration (migration.cpp), creation (project.cpp) and the Python mirror
+// (migrate.py) MUST stay in lockstep with these values.
+const double SF_ROOM_DEFAULT_W = 12.0;
+const double SF_ROOM_DEFAULT_D = 10.0;
+const double SF_ROOM_DEFAULT_H = 4.0;
 
 struct ObjectEnvelope {
   Uuid id;
