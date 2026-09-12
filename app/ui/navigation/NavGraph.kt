@@ -62,6 +62,9 @@ fun SoundForgeNavGraph(navController: NavHostController = rememberNavController(
             SceneEditorScreen(
                 projectId = entry.arguments?.getString("projectId"),
                 projectHandle = projectViewModel.handle,
+                scene = (uiState as? UiState.Ready)?.scene,
+                venue = (uiState as? UiState.Ready)?.venue,
+                projectName = (uiState as? UiState.Ready)?.meta?.name ?: "",
                 errorMessage = (uiState as? UiState.Error)?.message,
                 onEditVenue = { id ->
                     navController.navigate("${Route.Venue.path}?projectId=${id.orEmpty()}")
@@ -81,6 +84,7 @@ fun SoundForgeNavGraph(navController: NavHostController = rememberNavController(
             VenueScreen(
                 projectId = entry.arguments?.getString("projectId"),
                 projectHandle = projectViewModel.handle,
+                venue = (uiState as? UiState.Ready)?.venue,
                 errorMessage = (uiState as? UiState.Error)?.message,
                 onUpdateVenue = { name, w, d, h -> projectViewModel.updateVenue(name, w, d, h) },
                 onNavigateBack = { navController.popBackStack() },

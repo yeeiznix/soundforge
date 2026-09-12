@@ -30,8 +30,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.keyboard.KeyboardType
 import androidx.compose.ui.unit.dp
-import id.soundforge.pastudio.platform.bridge.NativeBridge
-import org.json.JSONObject
 
 /** Numeric-decimal TextField; the engine validates finite, >0 dimensions. */
 @Composable
@@ -72,6 +70,7 @@ private fun parseDim(s: String): Double? = runCatching {
 fun VenueScreen(
     projectId: String?,
     projectHandle: Long = 0L,
+    venue: VenueKt? = null,
     errorMessage: String? = null,
     onUpdateVenue: (String, Double, Double, Double) -> Unit = { _: String, _: Double, _: Double, _: Double -> },
     onNavigateBack: () -> Unit = {},
@@ -90,22 +89,6 @@ fun VenueScreen(
         }
         return
     }
-
-    // --- Document snapshot (loaded on entry / handle change) ----------------
-    var venue by remember { mutableStateOf<VenueKt?>(null) }
-    var docError by remember { mutableStateOf<String?>(null) }
-
-    fun reloadDocument() {
-        docError = null
-        val json = NativeBridge.projectToJson(projectHandle)
-        if (json.isEmpty()) {
-            docError = NativeBridge.lastError(projectHandle)
-            return
-        }
-        venue = runCatching { JSONObject(json) }.getOrNull()?.let { projectVenueOf(it) }
-    }
-
-    LaunchedEffect(projectHandle) { reloadDocument() }
 
     // --- Editable fields (seeded per document refresh) ---------------------
     var venueName by remember { mutableStateOf("") }
@@ -159,13 +142,6 @@ fun VenueScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            if (docError != null) {
-                Text(
-                    text = docError ?: "",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                return@Column
-            }
             if (venue == null) {
                 Text(text = "No venue data in the open project")
                 return@Column

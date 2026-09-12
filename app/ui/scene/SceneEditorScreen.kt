@@ -37,10 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.keyboard.KeyboardType
 import androidx.compose.ui.unit.dp
-import id.soundforge.pastudio.platform.bridge.NativeBridge
 import id.soundforge.pastudio.venue.VenueKt
-import id.soundforge.pastudio.venue.projectVenueOf
-import org.json.JSONObject
 
 /** Numeric-decimal TextField; the engine validates finite, >0 dimensions. */
 @Composable
@@ -80,6 +77,9 @@ private fun parseDim(s: String): Double? = runCatching {
 fun SceneEditorScreen(
     projectId: String?,
     projectHandle: Long = 0L,
+    scene: SceneKt? = null,
+    venue: VenueKt? = null,
+    projectName: String = "",
     errorMessage: String? = null,
     onEditVenue: (String?) -> Unit = {},
     onNavigateBack: () -> Unit = {},
@@ -97,30 +97,6 @@ fun SceneEditorScreen(
         }
         return
     }
-
-    // --- Document snapshot (loaded on entry / handle change) ----------------
-    var scene by remember { mutableStateOf<SceneKt?>(null) }
-    var venue by remember { mutableStateOf<VenueKt?>(null) }
-    var projectName by remember { mutableStateOf("") }
-    var docError by remember { mutableStateOf<String?>(null) }
-
-    fun reloadDocument() {
-        docError = null
-        val json = NativeBridge.projectToJson(projectHandle)
-        if (json.isEmpty()) {
-            docError = NativeBridge.lastError(projectHandle)
-            return
-        }
-        val root = runCatching { JSONObject(json) }.getOrNull()
-        scene = root?.let { projectSceneOf(it) }
-        venue = root?.let { projectVenueOf(it) }
-        // PLAN_G1 §6.2: the scene name field edits the PROJECT name
-        // (single-name model — project == one scene); seed from project.name,
-        // not the frozen scene.name, so renames survive document reloads.
-        projectName = root?.optJSONObject("project")?.optString("name") ?: ""
-    }
-
-    LaunchedEffect(projectHandle) { reloadDocument() }
 
     // --- Editable fields (seeded per document refresh) ---------------------
     var sceneName by remember { mutableStateOf("") }
@@ -185,13 +161,6 @@ fun SceneEditorScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            if (docError != null) {
-                Text(
-                    text = docError ?: "",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                return@Column
-            }
             val s = scene
             val v = venue
             if (s == null || v == null) {
@@ -199,11 +168,12 @@ fun SceneEditorScreen(
                 return@Column
             }
 
+            // Edits the PROJECT name (single-name model PLAN_G1 §6.2).
             OutlinedTextField(
                 value = sceneName,
                 onValueChange = { sceneName = it },
                 singleLine = true,
-                label = { Text(text = "Scene name") },
+                label = { Text(text = "Scene/project name") },
                 modifier = Modifier.fillMaxWidth(),
             )
             TextButton(

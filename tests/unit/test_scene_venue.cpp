@@ -2,9 +2,12 @@
 #include <gtest/gtest.h>
 
 #include "soundforge/sf_project.h"
+#include "nlohmann/json.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -147,24 +150,16 @@ TEST(SceneVenue, HealthWarnsOnLegacyOutOfBoundsGeometry) {
     // Legacy/hand-edited docs can carry scene geometry outside the venue box;
     // the schema validator is structural only so they still open, and the
     // health check reports a Warning (not Error) — PLAN_G1 §9.6.
-    std::string s = read_file(FIXTURES_DIR "/project_minimal_v2.json");
-    const std::string orig_center =
-        "      \"center\": {\n"
-        "        \"x\": 6.0,\n"
-        "        \"y\": 5.0,\n"
-        "        \"z\": 2.0\n"
-        "      },";
-    const std::string oob_center =
-        "      \"center\": {\n"
-        "        \"x\": 100.0,\n"
-        "        \"y\": 100.0,\n"
-        "        \"z\": 100.0\n"
-        "      },";
-    ASSERT_NE(s.find(orig_center), std::string::npos);
-    s.replace(s.find(orig_center), orig_center.size(), oob_center);
+    const std::string s = read_file(FIXTURES_DIR "/project_minimal_v2.json");
+    nlohmann::json doc = nlohmann::json::parse(s);
+    // Fixture has scene.geometry.center at x:6.0, y:5.0, z:2.0.
+    doc["scene"]["geometry"]["center"]["x"] = 100.0;
+    doc["scene"]["geometry"]["center"]["y"] = 100.0;
+    doc["scene"]["geometry"]["center"]["z"] = 100.0;
+    const std::string mutated = doc.dump();
 
     sf_project_t* p = nullptr;
-    EXPECT_EQ(sf_project_from_json(s.data(), s.size(), &p), SF_OK);  // still opens
+    EXPECT_EQ(sf_project_from_json(mutated.data(), mutated.size(), &p), SF_OK);  // still opens
     ASSERT_NE(p, nullptr);
 
     char buf[4096];
@@ -175,4 +170,63 @@ TEST(SceneVenue, HealthWarnsOnLegacyOutOfBoundsGeometry) {
     EXPECT_EQ(r.find("\"status\": \"error\""), std::string::npos);
     EXPECT_NE(r.find("outside venue bounds"), std::string::npos);
     sf_project_destroy(p);
+}
+
+TEST(SceneVenue, VenueSetDimensionsRejectsNonFinite) {
+    sf_project_t* p = sf_project_create("NF", nullptr);
+    ASSERT_NE(p, nullptr);
+    EXPECT_EQ(sf_venue_set_dimensions(p, std::nan(""), 12.0, 6.0), SF_E_INVALID_ARG);
+    EXPECT_EQ(sf_venue_set_dimensions(p, 15.0, std::numeric_limits<double>::infinity(), 6.0),
+              SF_E_INVALID_ARG);
+    EXPECT_EQ(sf_venue_set_dimensions(p, 15.0, 12.0, -std::numeric_limits<double>::infinity()),
+              SF_E_INVALID_ARG);
+    sf_project_destroy(p);
+}
+
+TEST(SceneVenue, SceneSetGeometryRejectsNonFinite) {
+    sf_project_t* p = sf_project_create("NFG", nullptr);
+    ASSERT_NE(p, nullptr);
+    EXPECT_EQ(sf_scene_set_geometry(p, std::nan(""), 5.0, 2.0, 6.0, 5.0, 2.0),
+              SF_E_INVALID_ARG);
+    EXPECT_NE(std::string(sf_last_error(p)).find("finite"), std::string::npos);
+    sf_project_destroy(p);
+}
+
+TEST(SceneVenue, SceneSetGeometryAtBoundaryAccepted) {
+    sf_project_t* p = sf_project_create("B", nullptr);
+    ASSERT_NE(p, nullptr);
+    // Room defaults are 12x10x4; box bounds are inclusive.
+    EXPECT_EQ(sf_scene_set_geometry(p, 12.0, 10.0, 4.0, 0.0, 0.0, 0.0), SF_OK);
+    EXPECT_EQ(sf_scene_set_geometry(p, 12.0, 10.0, 4.0, 12.0, 10.0, 4.0), SF_OK);
+    sf_project_destroy(p);
+}
+
+TEST(SceneVenue, VenueRenameLongNameRejected) {
+    sf_project_t* p = sf_project_create("L", nullptr);
+    ASSERT_NE(p, nullptr);
+    std::string long_name(201, 'a');
+    EXPECT_EQ(sf_venue_rename(p, long_name.c_str()), SF_E_INVALID_ARG);
+    EXPECT_NE(std::string(sf_last_error(p)).find("too long"), std::string::npos);
+    // Venue name unchanged on failure.
+    EXPECT_NE(json_of(p).find("Untitled Venue"), std::string::npos);
+    sf_project_destroy(p);
+}
+
+TEST(SceneVenue, ClampSnappedRecordsAuditDetail) {
+    sf_project_t* p = sf_project_create("S", nullptr);
+    ASSERT_NE(p, nullptr);
+    // Inside the default 12x10x4 room...
+    EXPECT_EQ(sf_scene_set_geometry(p, 6.0, 5.0, 2.0, 6.0, 5.0, 2.0), SF_OK);
+    // ...then shrink the room so the geometry must be clamped.
+    EXPECT_EQ(sf_venue_set_dimensions(p, 4.0, 3.0, 2.0), SF_OK);
+    EXPECT_NE(json_of(p).find("snapped to room"), std::string::npos);
+    sf_project_destroy(p);
+
+    sf_project_t* p2 = sf_project_create("S2", nullptr);
+    ASSERT_NE(p2, nullptr);
+    // Geometry already fits inside the smaller room; no clamp.
+    EXPECT_EQ(sf_scene_set_geometry(p2, 2.0, 2.0, 1.0, 2.0, 2.0, 1.0), SF_OK);
+    EXPECT_EQ(sf_venue_set_dimensions(p2, 4.0, 3.0, 2.0), SF_OK);
+    EXPECT_EQ(json_of(p2).find("snapped to room"), std::string::npos);
+    sf_project_destroy(p2);
 }

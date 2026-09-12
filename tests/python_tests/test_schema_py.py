@@ -52,3 +52,15 @@ def test_migrate_v1_to_v2():
 
 def test_schema_version_const():
     assert SCHEMA_VERSION == 2
+
+
+def test_golden_v1_immutable():
+    # G1 keeps schema_golden_v1.json beside v2 (PLAN_G1 Appendix B (a)) but the
+    # drift DoD only diffs the v2 schema, so nothing else verifies v1 stays
+    # frozen. Pin its SHA-256 here: any regeneration or edit of the v1 golden
+    # must be an explicit, reviewed change.
+    import hashlib
+
+    path = REPO_ROOT / "tests" / "golden" / "schema_golden_v1.json"
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert digest == "2a2b1ca474d5b693b74cf6299188699f1e4d5a69e3f93f03ccf4a7a4b544a57f"

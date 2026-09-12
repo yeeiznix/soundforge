@@ -196,7 +196,11 @@ extern "C" sf_result_t sf_project_from_json(const char* json, size_t len, sf_pro
       sfcore::set_last_error(err);
       return SF_E_SCHEMA;
     }
-    sfcore::SfProject* p = new sfcore::SfProject();
+    sfcore::SfProject* p = new (std::nothrow) sfcore::SfProject();
+    if (!p) {
+      sfcore::set_last_error("from_json: out of memory");
+      return SF_E_NOMEM;
+    }
     p->doc = std::move(doc);
     *out = reinterpret_cast<sf_project_t*>(p);
     return SF_OK;
@@ -272,7 +276,11 @@ extern "C" sf_result_t sf_project_open_from_path(const char* path, sf_project_t*
       sfcore::set_last_error(err);
       return SF_E_SCHEMA;
     }
-    sfcore::SfProject* p = new sfcore::SfProject();
+    sfcore::SfProject* p = new (std::nothrow) sfcore::SfProject();
+    if (!p) {
+      sfcore::set_last_error("open: out of memory");
+      return SF_E_NOMEM;
+    }
     p->doc = std::move(doc);
     *out = reinterpret_cast<sf_project_t*>(p);
     sfcore::log_line(SF_LOG_INFO, "project", ("open: " + std::string(path)).c_str());
@@ -488,6 +496,8 @@ extern "C" sf_result_t sf_venue_set_dimensions(sf_project_t* p, double width_m,
     proj->doc.venue.depthM = depth_m;
     proj->doc.venue.heightM = height_m;
     // Keep scene geometry inside the (possibly smaller) room.
+    const sfcore::Point3 old_center = proj->doc.scene.center;
+    const sfcore::Point3 old_listening = proj->doc.scene.listening;
     auto clamp = [](double v, double hi) { return std::fmax(0.0, std::fmin(v, hi)); };
     proj->doc.scene.center = {clamp(proj->doc.scene.center.x, width_m),
                               clamp(proj->doc.scene.center.y, depth_m),
@@ -495,9 +505,17 @@ extern "C" sf_result_t sf_venue_set_dimensions(sf_project_t* p, double width_m,
     proj->doc.scene.listening = {clamp(proj->doc.scene.listening.x, width_m),
                                  clamp(proj->doc.scene.listening.y, depth_m),
                                  clamp(proj->doc.scene.listening.z, height_m)};
-    user_audit(proj, "venue.update", proj->doc.venue.id,
-               "dimensions=" + std::to_string(width_m) + "x" + std::to_string(depth_m) +
-                   "x" + std::to_string(height_m));
+    const bool snapped =
+        old_center.x != proj->doc.scene.center.x ||
+        old_center.y != proj->doc.scene.center.y ||
+        old_center.z != proj->doc.scene.center.z ||
+        old_listening.x != proj->doc.scene.listening.x ||
+        old_listening.y != proj->doc.scene.listening.y ||
+        old_listening.z != proj->doc.scene.listening.z;
+    std::string detail = "dimensions=" + std::to_string(width_m) + "x" +
+                         std::to_string(depth_m) + "x" + std::to_string(height_m);
+    if (snapped) detail += "; scene geometry snapped to room";
+    user_audit(proj, "venue.update", proj->doc.venue.id, detail);
     sfcore::log_line(SF_LOG_INFO, "project", "venue.update: dimensions");
     return SF_OK;
   } SF_CATCH_ERRORS()
@@ -522,8 +540,8 @@ extern "C" sf_result_t sf_scene_set_geometry(sf_project_t* p, double cx, double 
     const sf_result_t rc1 = sf_geo_point_in_box(cx, cy, cz, w, d, h, &c_in);
     const sf_result_t rc2 = sf_geo_point_in_box(lx, ly, lz, w, d, h, &l_in);
     if (rc1 != SF_OK || rc2 != SF_OK) {
-      sfcore::set_handle_error(proj, "scene.update: venue dimensions invalid");
-      return SF_E_SCHEMA;
+      sfcore::set_handle_error(proj, "scene.update: coordinates must be finite");
+      return SF_E_INVALID_ARG;
     }
     if (!c_in || !l_in) {
       sfcore::set_handle_error(proj, "scene.update: geometry outside venue bounds");

@@ -18,6 +18,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import id.soundforge.pastudio.scene.Pt3
 import id.soundforge.pastudio.scene.SceneKt
 import id.soundforge.pastudio.scene.projectSceneOf
@@ -70,12 +73,18 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
 
     private val repo = FileStorageRepository(File(application.filesDir))
 
+    /**
+     * Serializes all native-handle-touching work; close() joins via the same
+     * mutex (sf_project_* is not thread-safe per handle).
+     */
+    private val nativeMutex = Mutex()
+
     /** Opaque native project handle; 0L = none. Mutated only inside coroutines. */
-    var handle: Long = 0L
+    @Volatile var handle: Long = 0L
         private set
 
     /** Last native error from an edit helper (read after a failed commit). */
-    var lastEditError: String? = null
+    @Volatile var lastEditError: String? = null
 
     private val _state = MutableStateFlow<UiState>(UiState.Loading)
 
@@ -85,26 +94,29 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
     /** Create a new native project and adopt its handle. */
     fun create(name: String, venuePreset: String = "") {
         viewModelScope.launch(Dispatchers.IO) {
-            _state.value = UiState.Loading
-            val newHandle = NativeBridge.projectCreate(name, null)
-            if (newHandle == 0L) {
-                _state.value = UiState.Error(NativeBridge.lastError(0L))
-                return@launch
+            nativeMutex.withLock {
+                _state.value = UiState.Loading
+                val newHandle = NativeBridge.projectCreate(name, null)
+                if (newHandle == 0L) {
+                    _state.value = UiState.Error(NativeBridge.lastError(0L))
+                    return@launch
+                }
+                handle = newHandle
+                persistVenuePreset(newHandle, venuePreset)
+                _state.value = readyState(newHandle, fallbackName = name)
             }
-            handle = newHandle
-            persistVenuePreset(newHandle, name, venuePreset)
-            _state.value = readyState(newHandle, fallbackName = name)
         }
     }
 
     /**
-     * The venue preset chosen at creation is written straight into the new
-     * document (PLAN_G1 §6.4): named presets drive the room dimensions,
-     * free-form names keep the engine defaults. Failed edits leave the handle
-     * valid; the Ready state refresh surfaces the native error.
+     * Writes ONLY the venue dimensions from the creation-time preset
+     * (PLAN_G1 §6.4): named presets drive the room dimensions, free-form
+     * names keep the engine defaults. The project rename is deliberately
+     * skipped — projectCreate(name, null) already named the new document, so
+     * renaming again here would emit a duplicate `project.create` +
+     * `project.rename` audit pair on every new project.
      */
-    private fun persistVenuePreset(newHandle: Long, name: String, venuePreset: String) {
-        if (NativeBridge.renameProject(newHandle, name) != SF_OK) return
+    private fun persistVenuePreset(newHandle: Long, venuePreset: String) {
         val dims = BuiltInVenuePresetDims[venuePreset]
         if (dims != null) {
             NativeBridge.setVenueDimensions(newHandle, dims.first, dims.second, dims.third)
@@ -117,20 +129,22 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
     fun updateSceneGeometry(center: Pt3, listening: Pt3) {
         lastEditError = null
         viewModelScope.launch(Dispatchers.IO) {
-            if (handle == 0L) {
-                lastEditError = "No project is open"
-                return@launch
+            nativeMutex.withLock {
+                if (handle == 0L) {
+                    lastEditError = "No project is open"
+                    return@launch
+                }
+                if (NativeBridge.setSceneGeometry(
+                        handle, center.x, center.y, center.z,
+                        listening.x, listening.y, listening.z,
+                    ) != SF_OK
+                ) {
+                    lastEditError = NativeBridge.lastError(handle)
+                    _state.value = UiState.Error(lastEditError ?: "Scene update failed")
+                    return@launch
+                }
+                _state.value = readyState(handle, fallbackName = currentName())
             }
-            if (NativeBridge.setSceneGeometry(
-                    handle, center.x, center.y, center.z,
-                    listening.x, listening.y, listening.z,
-                ) != SF_OK
-            ) {
-                lastEditError = NativeBridge.lastError(handle)
-                _state.value = UiState.Error(lastEditError ?: "Scene update failed")
-                return@launch
-            }
-            _state.value = readyState(handle, fallbackName = currentName())
         }
     }
 
@@ -138,18 +152,20 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
     fun updateVenue(name: String, widthM: Double, depthM: Double, heightM: Double) {
         lastEditError = null
         viewModelScope.launch(Dispatchers.IO) {
-            if (handle == 0L) {
-                lastEditError = "No project is open"
-                return@launch
+            nativeMutex.withLock {
+                if (handle == 0L) {
+                    lastEditError = "No project is open"
+                    return@launch
+                }
+                if (NativeBridge.renameVenue(handle, name) != SF_OK ||
+                    NativeBridge.setVenueDimensions(handle, widthM, depthM, heightM) != SF_OK
+                ) {
+                    lastEditError = NativeBridge.lastError(handle)
+                    _state.value = UiState.Error(lastEditError ?: "Venue update failed")
+                    return@launch
+                }
+                _state.value = readyState(handle, fallbackName = name)
             }
-            if (NativeBridge.renameVenue(handle, name) != SF_OK ||
-                NativeBridge.setVenueDimensions(handle, widthM, depthM, heightM) != SF_OK
-            ) {
-                lastEditError = NativeBridge.lastError(handle)
-                _state.value = UiState.Error(lastEditError ?: "Venue update failed")
-                return@launch
-            }
-            _state.value = readyState(handle, fallbackName = name)
         }
     }
 
@@ -157,16 +173,18 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
     fun renameProject(name: String) {
         lastEditError = null
         viewModelScope.launch(Dispatchers.IO) {
-            if (handle == 0L) {
-                lastEditError = "No project is open"
-                return@launch
+            nativeMutex.withLock {
+                if (handle == 0L) {
+                    lastEditError = "No project is open"
+                    return@launch
+                }
+                if (NativeBridge.renameProject(handle, name) != SF_OK) {
+                    lastEditError = NativeBridge.lastError(handle)
+                    _state.value = UiState.Error(lastEditError ?: "Rename failed")
+                    return@launch
+                }
+                _state.value = readyState(handle, fallbackName = name)
             }
-            if (NativeBridge.renameProject(handle, name) != SF_OK) {
-                lastEditError = NativeBridge.lastError(handle)
-                _state.value = UiState.Error(lastEditError ?: "Rename failed")
-                return@launch
-            }
-            _state.value = readyState(handle, fallbackName = name)
         }
     }
 
@@ -176,57 +194,65 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
     /** Open a project document: repo read + NativeBridge.projectFromJson. */
     fun openFromPath(path: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            _state.value = UiState.Loading
-            val bytes = repo.readProject(path).getOrElse { error ->
-                _state.value = UiState.Error(error.message ?: "Unable to read project")
-                return@launch
+            nativeMutex.withLock {
+                _state.value = UiState.Loading
+                val bytes = repo.readProject(path).getOrElse { error ->
+                    _state.value = UiState.Error(error.message ?: "Unable to read project")
+                    return@launch
+                }
+                val opened = NativeBridge.projectFromJson(String(bytes, Charsets.UTF_8))
+                if (opened == 0L) {
+                    _state.value = UiState.Error(NativeBridge.lastError(0L))
+                    return@launch
+                }
+                handle = opened
+                _state.value = readyState(opened, fallbackName = File(path).nameWithoutExtension)
             }
-            val opened = NativeBridge.projectFromJson(String(bytes, Charsets.UTF_8))
-            if (opened == 0L) {
-                _state.value = UiState.Error(NativeBridge.lastError(0L))
-                return@launch
-            }
-            handle = opened
-            _state.value = readyState(opened, fallbackName = File(path).nameWithoutExtension)
         }
     }
 
     /** Serialize the open project and persist it at [path] via the repo. */
     fun saveTo(path: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            if (handle == 0L) {
-                _state.value = UiState.Error("No project is open")
-                return@launch
-            }
-            val previous = _state.value as? UiState.Ready
-            val json = NativeBridge.projectToJson(handle)
-            if (json.isEmpty()) {
-                _state.value = UiState.Error(NativeBridge.lastError(handle))
-                return@launch
-            }
-            repo.writeProject(path, json.toByteArray(Charsets.UTF_8))
-                .onSuccess {
-                    _state.value = UiState.Ready(
-                        // Keep parsed metadata; only the modification stamp moves.
-                        meta = previous?.meta?.copy(modifiedAt = isoNow())
-                            ?: parseMeta(json, File(path).nameWithoutExtension),
-                        healthReport = previous?.healthReport,
-                        scene = previous?.scene,
-                        venue = previous?.venue,
-                    )
+            nativeMutex.withLock {
+                if (handle == 0L) {
+                    _state.value = UiState.Error("No project is open")
+                    return@launch
                 }
-                .onFailure { error ->
-                    _state.value = UiState.Error(error.message ?: "Unable to write project")
+                val previous = _state.value as? UiState.Ready
+                val json = NativeBridge.projectToJson(handle)
+                if (json.isEmpty()) {
+                    _state.value = UiState.Error(NativeBridge.lastError(handle))
+                    return@launch
                 }
+                repo.writeProject(path, json.toByteArray(Charsets.UTF_8))
+                    .onSuccess {
+                        _state.value = UiState.Ready(
+                            // Keep parsed metadata; only the modification stamp moves.
+                            meta = previous?.meta?.copy(modifiedAt = isoNow())
+                                ?: parseMeta(json, File(path).nameWithoutExtension),
+                            healthReport = previous?.healthReport,
+                            scene = previous?.scene,
+                            venue = previous?.venue,
+                        )
+                    }
+                    .onFailure { error ->
+                        _state.value = UiState.Error(error.message ?: "Unable to write project")
+                    }
+            }
         }
     }
 
     /** Release the native handle; also invoked automatically from [onCleared]. */
     fun close() {
-        if (handle != 0L) {
-            runCatching { NativeBridge.projectDestroy(handle) }
-            handle = 0L
-            _state.value = UiState.Loading
+        runBlocking {
+            nativeMutex.withLock {
+                if (handle != 0L) {
+                    runCatching { NativeBridge.projectDestroy(handle) }
+                    handle = 0L
+                    _state.value = UiState.Loading
+                }
+            }
         }
     }
 

@@ -37,6 +37,10 @@ extern "C" sf_result_t sf_geo_point_in_box(double x, double y, double z,
       sfcore::set_last_error("point_in_box: invalid room box");
       return SF_E_INVALID_ARG;
     }
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+      sfcore::set_last_error("point_in_box: coordinates must be finite");
+      return SF_E_INVALID_ARG;
+    }
     *out_inside = (x >= 0.0 && x <= width && y >= 0.0 && y <= depth &&
                    z >= 0.0 && z <= height)
                       ? 1

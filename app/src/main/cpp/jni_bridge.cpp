@@ -98,20 +98,28 @@ Java_id_soundforge_pastudio_platform_bridge_NativeBridge_engineVersion(JNIEnv* e
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_id_soundforge_pastudio_platform_bridge_NativeBridge_schemaVersion(JNIEnv* /*env*/, jobject /*thiz*/) {
+Java_id_soundforge_pastudio_platform_bridge_NativeBridge_schemaVersion(JNIEnv* env, jobject /*thiz*/) {
   try {
     return sf_schema_version();
+  } catch (const std::exception& e) {
+    log_boundary_exception(env, "schemaVersion", e.what());
+    return -1;
   } catch (...) {
+    log_boundary_exception(env, "schemaVersion", "unknown");
     return -1;
   }
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_id_soundforge_pastudio_platform_bridge_NativeBridge_isCompatible(JNIEnv* /*env*/, jobject /*thiz*/,
+Java_id_soundforge_pastudio_platform_bridge_NativeBridge_isCompatible(JNIEnv* env, jobject /*thiz*/,
                                                       jint schema_version) {
   try {
     return sf_is_compatible(schema_version) == 1 ? JNI_TRUE : JNI_FALSE;
+  } catch (const std::exception& e) {
+    log_boundary_exception(env, "isCompatible", e.what());
+    return JNI_FALSE;
   } catch (...) {
+    log_boundary_exception(env, "isCompatible", "unknown");
     return JNI_FALSE;
   }
 }
@@ -211,10 +219,16 @@ Java_id_soundforge_pastudio_platform_bridge_NativeBridge_projectCreate(JNIEnv* e
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_id_soundforge_pastudio_platform_bridge_NativeBridge_projectDestroy(JNIEnv* /*env*/, jobject /*thiz*/,
+Java_id_soundforge_pastudio_platform_bridge_NativeBridge_projectDestroy(JNIEnv* env, jobject /*thiz*/,
                                                         jlong handle) {
   if (handle != 0) {  // guard: 0L means "no project"
-    sf_project_destroy(to_handle(handle));  // NULL handle is a no-op in the core
+    try {
+      sf_project_destroy(to_handle(handle));  // NULL handle is a no-op in the core
+    } catch (const std::exception& e) {
+      log_boundary_exception(env, "projectDestroy", e.what());
+    } catch (...) {
+      log_boundary_exception(env, "projectDestroy", "unknown");
+    }
   }
 }
 
@@ -230,6 +244,12 @@ Java_id_soundforge_pastudio_platform_bridge_NativeBridge_projectToJson(JNIEnv* e
     if (rc != SF_OK || json == nullptr) {
       if (json != nullptr) sf_free_string(json);
       return env->NewStringUTF("");  // G0: empty string on error, no exception
+    }
+    constexpr size_t kMaxJsonBytes = 16 * 1024 * 1024;  // 16 MiB
+    if (len > kMaxJsonBytes) {
+      sf_free_string(json);
+      __android_log_print(ANDROID_LOG_ERROR, "SF/jni", "projectToJson: document too large (%zu bytes)", len);
+      return env->NewStringUTF("");
     }
     jstring out = env->NewStringUTF(json);
     sf_free_string(json);
@@ -277,7 +297,12 @@ Java_id_soundforge_pastudio_platform_bridge_NativeBridge_validateJson(JNIEnv* en
     if (err[0] == '\0') {
       std::snprintf(err, sizeof(err), "invalid project JSON (code %d)", static_cast<int>(rc));
     }
-    return env->NewStringUTF(err);
+    jstring out = env->NewStringUTF(err);
+    if (out == nullptr) {
+      // OOM: must not look like "valid JSON" (null return means valid).
+      return env->NewStringUTF("validateJson: out of memory");
+    }
+    return out;
   } catch (const std::exception& e) {
     log_boundary_exception(env, "validateJson", e.what());
     return env->NewStringUTF("validateJson: native exception");
