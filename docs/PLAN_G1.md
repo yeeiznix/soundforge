@@ -30,7 +30,10 @@ schema v2 + v1→v2 migration, all under the existing no-drift schema discipline
   feedback). NEW `VenueScreen.kt` (venue name + dimensions). Typed mirrors
   `SceneKt`/`VenueKt` (G0 deferred this to G1; UI now needs field-level editing).
 - **NewProjectDialog persists the venue preset** (G0 captured it as UI-only
-  state — see plan §6.3): selecting "Warehouse" sets the venue name at creation.
+  state — see plan §6.3): selecting "Warehouse" sets the venue *dimensions*
+  at creation (named presets map to the built-in room profiles). The venue
+  *name* stays the creation default ("Untitled Venue") — no preset-name
+  plumbing; corrected in g1.1 (early draft claimed name-setting).
 - **Migration v1→v2** + stepwise chain (0→1→2) in `sf_migrate_json`/`open()`.
 
 ### 1.3 Explicitly out of scope (G2+ — must stay stub/unchanged)
@@ -303,6 +306,19 @@ surfaces.
   `setSceneGeometry`, field-level `supportingText` shows the native
   `lastError` on failure (e.g. "outside venue bounds")
 - stays `projectId: String?`-parameterized; falls back to the "no project open"
+
+**G2 follow-up TODOs (recorded from the g1.1 review, not gate-blocking):**
+1. `sf_scene_rename` mutator + freeze tracking — `scene.name` is permanently
+   frozen at "Default Scene" and every future multi-scene consumer
+   (list screens) will trip over the lying name field.
+2. JSON parse depth cap — the vendored nlohmann 3.11.3 parser has no
+   `max_depth` parameter and its parse callback *discards* subtrees on
+   `false` (verified) rather than failing, so no safe depth gate exists
+   without a third-party patch; crafted deeply-nested `.sfproj` could
+   exhaust the parse stack. Accepted for G1's local-file threat model.
+3. Rename length cap is **bytes** (`strlen`) not characters — a ≤200-code-unit
+   emoji-heavy name is rejected. Either cap in characters or add a Kotlin
+   pre-check counter.
   affordance when `null` (matching G0 placeholder posture).
 Responsive layout + Material3 theming preserved from G0 theme files.
 
@@ -314,9 +330,13 @@ Responsive layout + Material3 theming preserved from G0 theme files.
 ### 6.4 `NewProjectDialog.kt` + `ProjectViewModel.kt` — persist the preset (EDIT)
 - Dialog stays visually identical; `onConfirm` now passes `(name, venuePreset)`.
 - `ProjectViewModel.create(name, venueName)`: native `projectCreate(name, null)`
-  then `renameProject(newHandle, name)` + `setVenueDimensions` default
-  `(12,10,4)` only if a preset named after a built-in profile is selected
-  (G1: presets map to default dims; free-form venue names keep dims default).
+  names the document; the preset persistence writes only
+  `setVenueDimensions` default `(12,10,4)` when a preset named after a
+  built-in profile is selected (G1: presets map to default dims; free-form
+  venue names keep dims default). g1.1 amendment: the `renameProject`
+  call listed in early drafts was removed — `projectCreate` already names
+  the new document and the redundant rename emitted a duplicate
+  `project.create` + `project.rename` audit pair on every create.
 - `ProjectViewModel` gains `fun updateScene(geometry)/fun updateVenue(...)`
   helpers (thin wrappers over bridge + state refresh via `projectToJson`).
 
@@ -345,6 +365,12 @@ Work in this order; each phase leaves the tree buildable + all suites green.
 **Gate status (2026-09-12):** P1+P2 `7b15d28` · P3 `c1b5849` · P4 `8c7be60` ·
 P5 `d449baf` · P6 `0ecfcf8` · DoD-sweep fixes `c48ebc5` · P7 = this commit.
 DoD results in §9; accepted deviations in `docs/RELEASE_NOTES_G1.md`.
+
+**Post-gate review (g1.1, 2026-09-12):** owed specialist review dispatched
+after provider recovery — @oracle (Appendix B + P4/P5) and @security-reviewer
+(JNI surface) both ran; no gate-blocking defect in the native core; findings
+disposition in `docs/RELEASE_NOTES_G1.md` §g1.1. Fixes landed on `main` after
+`g1-complete`: code+tests `d7183be`, docs = this commit. Gate tag unchanged.
 
 ## 8. Verification (realistic for this environment)
 
