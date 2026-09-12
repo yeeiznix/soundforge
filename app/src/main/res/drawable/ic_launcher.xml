@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G0 app icon stub — simple speaker mark; replaced by adaptive icons later. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#1E88E5"
+        android:pathData="M54,54m-32,0a32,32 0,1 1,64 0a32,32 0,1 1,-64 0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M44,60L44,48L54,42L54,66Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M60,48a6,6 0,0 1,0 12" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M65,44a11,11 0,0 1,0 20" />
+</vector>

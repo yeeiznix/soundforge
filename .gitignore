@@ -1,0 +1,14 @@
+# G0 ignores — docs/PLAN_G0.md Phase 7 (parallelizable list)
+build/
+native/build/
+app/build/
+.gradle/
+local.properties
+*.sfproj.bak.*
+logs/
+__pycache__/
+*.pyc
+.idea/
+.cxx/
+.pytest_cache/
+.mock-cache

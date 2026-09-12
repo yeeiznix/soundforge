@@ -1,0 +1,10 @@
+{
+  "latest": 1,
+  "migrations": [
+    {
+      "from": 0,
+      "to": 1,
+      "description": "G0 init: inject required top-level keys, schemaVersion=1, engineVersion, auditLog migrate entry"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "engineVersion": "not-a-version",
+  "project": {
+    "id": "bad-uuid",
+    "name": "",
+    "createdAt": "not-a-date",
+    "modifiedAt": "not-a-date",
+    "author": 123,
+    "notes": false
+  },
+  "venue": {},
+  "scene": {},
+  "auditLog": []
+}

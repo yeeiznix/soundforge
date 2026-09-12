@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "engineVersion": "0.1.0-g0",
+  "project": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "name": "Minimal V1",
+    "createdAt": "2026-09-11T00:00:00.000Z",
+    "modifiedAt": "2026-09-11T00:00:00.000Z",
+    "author": "",
+    "notes": ""
+  },
+  "venue": {
+    "id": "660e8400-e29b-41d4-a716-446655440000",
+    "name": "Untitled Venue"
+  },
+  "scene": {
+    "id": "770e8400-e29b-41d4-a716-446655440000",
+    "name": "Default Scene",
+    "venueRef": "660e8400-e29b-41d4-a716-446655440000"
+  },
+  "audienceReceivers": [],
+  "equipment": [],
+  "signalGraph": {
+    "nodes": [],
+    "edges": []
+  },
+  "powerGraph": {
+    "nodes": [],
+    "edges": []
+  },
+  "audioAssets": [],
+  "dspPresets": [],
+  "arrayConfigurations": [],
+  "measurements": [],
+  "simulationRuns": [],
+  "trainingScenarios": [],
+  "inventoryRefs": [],
+  "reports": [],
+  "auditLog": [
+    {
+      "ts": "2026-09-11T00:00:00.000Z",
+      "actor": "system",
+      "action": "project.create",
+      "objectId": "550e8400-e29b-41d4-a716-446655440000",
+      "detail": "schemaVersion 1"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+# SoundForge G0 — Python reference & tooling package (docs/PLAN_G0.md §2.5).
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "soundforge-py"
+version = "0.1.0-g0"
+description = "SoundForge G0 Python reference & tooling stubs"
+requires-python = ">=3.10"
+dependencies = ["jsonschema"]

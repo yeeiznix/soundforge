@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://soundforge.pa/schemas/project_v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "engineVersion",
+    "project",
+    "venue",
+    "scene",
+    "audienceReceivers",
+    "equipment",
+    "signalGraph",
+    "powerGraph",
+    "audioAssets",
+    "dspPresets",
+    "arrayConfigurations",
+    "measurements",
+    "simulationRuns",
+    "trainingScenarios",
+    "inventoryRefs",
+    "reports",
+    "auditLog"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1
+    },
+    "engineVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+.*$"
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "createdAt", "modifiedAt", "author", "notes"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "name": { "type": "string", "minLength": 1 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "modifiedAt": { "type": "string", "format": "date-time" },
+        "author": { "type": "string" },
+        "notes": { "type": "string" }
+      }
+    },
+    "venue": {
+      "type": "object",
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "name": { "type": "string" }
+      }
+    },
+    "scene": {
+      "type": "object",
+      "required": ["id", "name", "venueRef"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "name": { "type": "string" },
+        "venueRef": { "type": "string", "format": "uuid" }
+      }
+    },
+    "audienceReceivers": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/objectEnvelope" }
+    },
+    "equipment": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/objectEnvelope" }
+    },
+    "signalGraph": {
+      "type": "object",
+      "required": ["nodes", "edges"],
+      "properties": {
+        "nodes": { "type": "array" },
+        "edges": { "type": "array" }
+      }
+    },
+    "powerGraph": {
+      "type": "object",
+      "required": ["nodes", "edges"],
+      "properties": {
+        "nodes": { "type": "array" },
+        "edges": { "type": "array" }
+      }
+    },
+    "audioAssets": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/objectEnvelope" }
+    },
+    "dspPresets": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/objectEnvelope" }
+    },
+    "arrayConfigurations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/objectEnvelope" }
+    },
+    "measurements": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/objectEnvelope" }
+    },
+    "simulationRuns": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/objectEnvelope" }
+    },
+    "trainingScenarios": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/objectEnvelope" }
+    },
+    "inventoryRefs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/objectEnvelope" }
+    },
+    "reports": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/objectEnvelope" }
+    },
+    "auditLog": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["ts", "actor", "action", "objectId", "detail"],
+        "properties": {
+          "ts": { "type": "string", "format": "date-time" },
+          "actor": { "type": "string" },
+          "action": {
+            "type": "string",
+            "enum": ["project.create", "project.open", "project.save", "project.migrate"]
+          },
+          "objectId": { "type": "string", "format": "uuid" },
+          "detail": { "type": "string" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "objectEnvelope": {
+      "type": "object",
+      "required": ["id", "type", "version", "createdAt", "modifiedAt", "provenance", "data"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "type": {
+          "type": "string",
+          "enum": [
+            "audienceReceiver",
+            "equipment",
+            "audioAsset",
+            "dspPreset",
+            "arrayConfiguration",
+            "measurement",
+            "simulationRun",
+            "trainingScenario",
+            "inventoryRef",
+            "report",
+            "signalGraph",
+            "powerGraph"
+          ]
+        },
+        "version": { "type": "integer", "minimum": 1 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "modifiedAt": { "type": "string", "format": "date-time" },
+        "provenance": { "type": "string" },
+        "data": { "type": "object" }
+      }
+    }
+  }
+}
