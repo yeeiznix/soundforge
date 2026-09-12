@@ -51,8 +51,9 @@ inline const std::vector<std::string>& top_level_keys() {
   return k;
 }
 
-inline std::array<const char*, 4> audit_actions() {
-  return {"project.create", "project.open", "project.save", "project.migrate"};
+inline std::array<const char*, 7> audit_actions() {
+  return {"project.create", "project.open", "project.save", "project.migrate",
+          "project.rename", "venue.update", "scene.update"};
 }
 
 // ---------------------------------------------------------------------------

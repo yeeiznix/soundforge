@@ -44,6 +44,18 @@ const char* sf_project_get_id(const sf_project_t* p);
 int32_t     sf_project_get_schema_version(const sf_project_t* p);
 const char* sf_project_get_engine_version(const sf_project_t* p);
 
+/* --- G1 editing mutators (schema v2: venue.dimensions, scene.geometry) ---
+ * Additive ABI (PLAN_G1 §4.2). Every mutator appends an audit entry
+ * (actor "user", action project.rename|venue.update|scene.update) and bumps
+ * project.modifiedAt. Errors: SF_* code + message via sf_last_error(handle).
+ * Names are non-empty, at most 200 chars. */
+sf_result_t sf_project_rename(sf_project_t* p, const char* new_name);
+sf_result_t sf_venue_rename(sf_project_t* p, const char* new_name);
+sf_result_t sf_venue_set_dimensions(sf_project_t* p, double width_m, double depth_m,
+                                    double height_m);
+sf_result_t sf_scene_set_geometry(sf_project_t* p, double cx, double cy, double cz,
+                                  double lx, double ly, double lz);
+
 /* --- Health ---
  * Writes a JSON report:
  *   {"status":"ok"|"warning"|"error","warnings":[...],"errors":[...],"stats":{...}}

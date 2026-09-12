@@ -2,6 +2,7 @@
 /// health checks, and migration on open (§3.4, §5, §6.3, §9).
 #include "sf_internal.hpp"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
@@ -12,6 +13,7 @@
 
 #include "soundforge/sf_project.h"
 #include "soundforge/sf_diagnostics.h"
+#include "soundforge/sf_geometry.h"
 
 namespace sfcore {
 namespace {
@@ -250,7 +252,7 @@ extern "C" sf_result_t sf_project_open_from_path(const char* path, sf_project_t*
     }
     if (sv >= 0 && sv < SF_SCHEMA_VERSION) {
       // Backup (best-effort) before migration.
-      const std::string bak = std::string(path) + ".bak.v0";
+      const std::string bak = std::string(path) + ".bak.v" + std::to_string(sv);
       sfcore::copy_file(path, bak);  // ignore failure, log warn
       std::string err;
       const sf_result_t rc = sfcore::migrate_doc_inplace(j, sv, SF_SCHEMA_VERSION, err);
@@ -383,5 +385,138 @@ extern "C" sf_result_t sf_project_health_check(const sf_project_t* p, char* repo
     }
     sfcore::log_line(SF_LOG_WARN, "health", s.c_str());
     return SF_E_SCHEMA;
+  } SF_CATCH_ERRORS()
+}
+
+// ---------------------------------------------------------------------------
+// C ABI: editing mutators (G1, PLAN_G1 §4.2)
+// ---------------------------------------------------------------------------
+namespace {
+
+// Appends an actor-"user" audit entry and bumps project.modifiedAt.
+// Mirrors save's system audit; detail is truncated to 512 chars as documented
+// on AuditEntry. Caller must hold a non-null handle.
+void user_audit(sfcore::SfProject* proj, const char* action,
+                const sfcore::Uuid& object_id, const std::string& detail) {
+  const std::string now = sfcore::now_iso8601();
+  std::string d = detail;
+  if (d.size() > 512) d.resize(512);
+  proj->doc.auditLog.push_back({now, "user", action, object_id, d});
+  proj->doc.project.modifiedAt = now;
+}
+
+}  // namespace
+
+extern "C" sf_result_t sf_project_rename(sf_project_t* p, const char* new_name) {
+  if (!p) {
+    sfcore::set_handle_error(nullptr, "rename: null handle");
+    return SF_E_INVALID_ARG;
+  }
+  try {
+    auto* proj = reinterpret_cast<sfcore::SfProject*>(p);
+    if (!new_name || !*new_name) {
+      sfcore::set_handle_error(proj, "rename: name must be non-empty");
+      return SF_E_INVALID_ARG;
+    }
+    if (std::strlen(new_name) > 200) {
+      sfcore::set_handle_error(proj, "rename: name too long (>200 chars)");
+      return SF_E_INVALID_ARG;
+    }
+    proj->doc.project.name = new_name;
+    user_audit(proj, "project.rename", proj->doc.project.id,
+               "name=" + std::string(new_name));
+    sfcore::log_line(SF_LOG_INFO, "project", ("rename: " + std::string(new_name)).c_str());
+    return SF_OK;
+  } SF_CATCH_ERRORS()
+}
+
+extern "C" sf_result_t sf_venue_rename(sf_project_t* p, const char* new_name) {
+  if (!p) {
+    sfcore::set_handle_error(nullptr, "venue.update: null handle");
+    return SF_E_INVALID_ARG;
+  }
+  try {
+    auto* proj = reinterpret_cast<sfcore::SfProject*>(p);
+    if (!new_name || !*new_name) {
+      sfcore::set_handle_error(proj, "venue.update: name must be non-empty");
+      return SF_E_INVALID_ARG;
+    }
+    if (std::strlen(new_name) > 200) {
+      sfcore::set_handle_error(proj, "venue.update: name too long (>200 chars)");
+      return SF_E_INVALID_ARG;
+    }
+    proj->doc.venue.name = new_name;
+    user_audit(proj, "venue.update", proj->doc.venue.id,
+               "name=" + std::string(new_name));
+    sfcore::log_line(SF_LOG_INFO, "project", "venue.update: name");
+    return SF_OK;
+  } SF_CATCH_ERRORS()
+}
+
+extern "C" sf_result_t sf_venue_set_dimensions(sf_project_t* p, double width_m,
+                                               double depth_m, double height_m) {
+  if (!p) {
+    sfcore::set_handle_error(nullptr, "venue.update: null handle");
+    return SF_E_INVALID_ARG;
+  }
+  try {
+    auto* proj = reinterpret_cast<sfcore::SfProject*>(p);
+    if (sf_geo_validate_box(width_m, depth_m, height_m) != SF_OK) {
+      sfcore::set_handle_error(proj, "venue.update: dimensions must be finite and > 0");
+      return SF_E_INVALID_ARG;
+    }
+    proj->doc.venue.widthM = width_m;
+    proj->doc.venue.depthM = depth_m;
+    proj->doc.venue.heightM = height_m;
+    // Keep scene geometry inside the (possibly smaller) room.
+    auto clamp = [](double v, double hi) { return std::fmax(0.0, std::fmin(v, hi)); };
+    proj->doc.scene.center = {clamp(proj->doc.scene.center.x, width_m),
+                              clamp(proj->doc.scene.center.y, depth_m),
+                              clamp(proj->doc.scene.center.z, height_m)};
+    proj->doc.scene.listening = {clamp(proj->doc.scene.listening.x, width_m),
+                                 clamp(proj->doc.scene.listening.y, depth_m),
+                                 clamp(proj->doc.scene.listening.z, height_m)};
+    user_audit(proj, "venue.update", proj->doc.venue.id,
+               "dimensions=" + std::to_string(width_m) + "x" + std::to_string(depth_m) +
+                   "x" + std::to_string(height_m));
+    sfcore::log_line(SF_LOG_INFO, "project", "venue.update: dimensions");
+    return SF_OK;
+  } SF_CATCH_ERRORS()
+}
+
+extern "C" sf_result_t sf_scene_set_geometry(sf_project_t* p, double cx, double cy,
+                                             double cz, double lx, double ly, double lz) {
+  if (!p) {
+    sfcore::set_handle_error(nullptr, "scene.update: null handle");
+    return SF_E_INVALID_ARG;
+  }
+  try {
+    auto* proj = reinterpret_cast<sfcore::SfProject*>(p);
+    const double w = proj->doc.venue.widthM;
+    const double d = proj->doc.venue.depthM;
+    const double h = proj->doc.venue.heightM;
+    if (sf_geo_validate_box(w, d, h) != SF_OK) {
+      sfcore::set_handle_error(proj, "scene.update: venue dimensions missing or invalid");
+      return SF_E_SCHEMA;
+    }
+    int c_in = 0, l_in = 0;
+    const sf_result_t rc1 = sf_geo_point_in_box(cx, cy, cz, w, d, h, &c_in);
+    const sf_result_t rc2 = sf_geo_point_in_box(lx, ly, lz, w, d, h, &l_in);
+    if (rc1 != SF_OK || rc2 != SF_OK) {
+      sfcore::set_handle_error(proj, "scene.update: venue dimensions invalid");
+      return SF_E_SCHEMA;
+    }
+    if (!c_in || !l_in) {
+      sfcore::set_handle_error(proj, "scene.update: geometry outside venue bounds");
+      return SF_E_SCHEMA;
+    }
+    proj->doc.scene.center = {cx, cy, cz};
+    proj->doc.scene.listening = {lx, ly, lz};
+    user_audit(proj, "scene.update", proj->doc.scene.id,
+               "center=" + std::to_string(cx) + "," + std::to_string(cy) + "," +
+                   std::to_string(cz) + " listening=" + std::to_string(lx) + "," +
+                   std::to_string(ly) + "," + std::to_string(lz));
+    sfcore::log_line(SF_LOG_INFO, "project", "scene.update: geometry");
+    return SF_OK;
   } SF_CATCH_ERRORS()
 }

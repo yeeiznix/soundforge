@@ -10,6 +10,7 @@ add_executable(sf_unit_tests
     test_schema_validate.cpp
     test_migration.cpp
     test_geometry.cpp
+    test_scene_venue.cpp
     test_diagnostics.cpp
 )
 
