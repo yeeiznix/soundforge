@@ -213,16 +213,21 @@ sf_result_t sf_scene_set_geometry(sf_project_t* p,
 ```
 
 ### 4.3 JNI bridge — additive
-`app/src/main/cpp/jni_bridge.cpp` gains exports 13–15 (prefix
+`app/src/main/cpp/jni_bridge.cpp` gains exports 13–16 (prefix
 `Java_id_soundforge_pastudio_platform_bridge_NativeBridge_`); `NativeBridge.kt`
-gains three mirrors, still *one external fun per C entry, no logic*:
+gains four mirrors, still *one external fun per C entry, no logic*:
 
 ```kotlin
 external fun renameProject(handle: Long, newName: String): Int    // SF_* code
+external fun renameVenue(handle: Long, newName: String): Int      // added in DoD sweep (c48ebc5)
 external fun setVenueDimensions(handle: Long, w: Double, d: Double, h: Double): Int
 external fun setSceneGeometry(handle: Long, cx: Double, cy: Double, cz: Double,
                               lx: Double, ly: Double, lz: Double): Int
 ```
+Export 16 (`renameVenue`) closes a gap found in the DoD sweep: §6.3's venue
+name field needs a venue-name commit path, and §4.2 already defines
+`sf_venue_rename` — without the export, `updateVenue` renamed the *project*
+instead, corrupting the three-name document model.
 `Int` result codes keep the G0 "empty-string means error, check lastError"
 pattern uniformly applicable (bridge stays thin; Kotlin callers map `!=SF_OK` →
 `lastError(handle)`).
@@ -337,6 +342,10 @@ Work in this order; each phase leaves the tree buildable + all suites green.
 | P6 | Editing UI | EDIT `SceneEditorScreen.kt`, `ProjectViewModel.kt`, `NewProjectDialog.kt`, `NavGraph.kt`, `Routes.kt`; NEW `VenueScreen.kt`; EDIT `app/src/androidTest/.../NavigationSmokeTest.kt`; NEW `SceneEditSmokeTest.kt` | static review only |
 | P7 | Docs + DoD sweep | EDIT `docs/PLAN_G1.md` (this file), `docs/RELEASE_NOTES_G1.md` NEW; gap-check Appendix | full suites + drift + release notes |
 
+**Gate status (2026-09-12):** P1+P2 `7b15d28` · P3 `c1b5849` · P4 `8c7be60` ·
+P5 `d449baf` · P6 `0ecfcf8` · DoD-sweep fixes `c48ebc5` · P7 = this commit.
+DoD results in §9; accepted deviations in `docs/RELEASE_NOTES_G1.md`.
+
 ## 8. Verification (realistic for this environment)
 
 ```bash
@@ -348,13 +357,17 @@ python3 -m pytest tests/python_tests -q
 
 # 3. Schema drift (must print nothing / exit 0)
 diff native/data/schemas/project_schema.json tests/golden/schema_golden_v2.json
-python3 -c "import sys; sys.path.insert(0,'python'); \
-import soundforge_py.schema as s; assert not s.validate_project(\
-s.load_schema()); print('schema self-valid OK')"
+# Python mirror must accept the canonical doc (validate_project validates
+# project DOCUMENTS, not the schema file itself):
+python3 -c "import sys,json; sys.path.insert(0,'python'); \
+import soundforge_py.schema as s; d=json.load(open(\
+'tests/fixtures/project_minimal_v2.json')); assert s.validate_project(d)==[]; \
+print('mirror validates v2 fixture')"
 
 # 4. Android (static only — no SDK/NDK in dev container; documented limitation)
 grep -c '^Java_id_soundforge_pastudio_platform_bridge_NativeBridge_' \
-  app/src/main/cpp/jni_bridge.cpp   # expect 15 (12 G0 + 3 G1)
+  app/src/main/cpp/jni_bridge.cpp   # expect 16 (12 G0 + 4 G1: renameProject,
+                                    # renameVenue, setVenueDimensions, setSceneGeometry)
 ```
 
 ## 9. Definition of Done (Gate G1)
@@ -383,6 +396,12 @@ All true on `main`:
    measurement|optimization/*` remain stub-only; `SignalEditorScreen`/
    `MixerScreen` remain placeholders; no `*.sfasset` code lands.
 9. **Docs:** this file + `docs/RELEASE_NOTES_G1.md` checked in; tag `g1-complete`.
+
+**Result (2026-09-12):** 1 ✅ native 41/41 (Android ⚠️ static-only, export
+grep 16) · 2 ✅ drift IDENTICAL + pytest · 3 ✅ migration chain + `.bak.v1` ·
+4 ✅ geometry kernels · 5 ✅ editing round-trip · 6 ✅ mutator rejects oob
+(`SF_E_SCHEMA`) + health Warning for legacy oob docs · 7 ✅ audit entries 4→7
+actions · 8 ✅ no G2 leakage · 9 ✅ docs + tag `g1-complete`.
 
 **Exit artifact:** tag `g1-complete`; release notes attach an example `.sfproj`
 (v2 fixture) + `adb logcat -s SF` snippet (device-only, placeholder format).
@@ -415,8 +434,11 @@ const), `tests/unit/test_schema_validate.cpp`, `test_version.cpp`,
 **STUB (unchanged from G0):**
 `native/src/{graph,dsp,audio,acoustics,arrays,power,render,measurement,optimization}/CMakeLists.txt`.
 
-> Total G1: ~13 NEW, ~20 EDIT, 0 new STUB. No file >300 LOC (target: geometry.cpp
-> ≤250, SceneEditorScreen.kt ≤280, ProjectViewModel.kt ≤300).
+> Total G1: ~13 NEW, ~20 EDIT, 0 new STUB. Actual LOC (2026-09-12):
+> `geometry.cpp` 81 ✓ · `SceneEditorScreen.kt` 276 ✓ · `ProjectViewModel.kt` 284 ✓ ·
+> `VenueScreen.kt` 207 ✓ · `schema.cpp` 320 / `migrate.py` 354 / `project.cpp` 540
+> exceed the ≤300 advisory (project.cpp was already 378 at G0; advisory only,
+> not a gate criterion).
 
 ## Appendix B — Open Questions (for review gate)
 
@@ -427,3 +449,23 @@ const), `tests/unit/test_schema_validate.cpp`, `test_version.cpp`,
 3. NewProjectDialog preset→dimensions mapping table: hardcode 3 profiles or read
    from native? (Recommendation: hardcode 3 in `VenuePresets`, matching G0 UI.)
 4. Health-check severity for out-of-bounds geometry: Warning (rec.) vs Error.
+
+**Resolved in gate (2026-09-12):**
+
+1. **KEPT** `schema_golden_v1.json` beside v2 — G0 release notes reference it,
+   the drift test targets v2 only, and git history preserves v1 anyway.
+2. **Pure mutator** — `renameProject` failure leaves the handle valid and the
+   document unchanged (test `SceneVenue.RenameRejects`); rollback would need a
+   transactional layer G1 doesn't need.
+3. **Hardcoded** 3 profiles in `BuiltInVenuePresetDims` (Kotlin); "Small Club"
+   mirrors `SF_ROOM_DEFAULT_*` (`sf_internal.hpp` + `migrate.py` lockstep).
+   Drift hazard acknowledged in RELEASE_NOTES_G1.md (feature constant, not
+   schema).
+4. **Error on mutator write** (`SF_E_SCHEMA` + `last_error`) and **Warning in
+   `sf_project_health_check`** for legacy out-of-bounds docs (`c48ebc5`) —
+   schema validation stays structural-only so such docs remain openable and
+   repairable in the editor.
+
+>The owed specialist review of this appendix + P4/P5 (planner/oracle) and of
+> the JNI surface (security-reviewer) is deferred: `opencode-go/*` provider
+> models were unavailable throughout the gate. Re-dispatch on recovery.
