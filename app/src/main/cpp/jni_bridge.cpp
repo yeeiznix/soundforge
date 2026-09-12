@@ -6,6 +6,8 @@
 // The 12 exported functions (one per NativeBridge external fun) all use the
 // full symbol prefix Java_id_soundforge_pastudio_platform_bridge_NativeBridge_.
 // G0: synchronous calls; G2 introduces SfCommandQueue for audio-thread safety.
+// G1: 15 exported functions (12 + renameProject, setVenueDimensions,
+// setSceneGeometry) — one per NativeBridge external fun.
 #include <jni.h>
 #include <android/log.h>
 
@@ -111,6 +113,63 @@ Java_id_soundforge_pastudio_platform_bridge_NativeBridge_isCompatible(JNIEnv* /*
     return sf_is_compatible(schema_version) == 1 ? JNI_TRUE : JNI_FALSE;
   } catch (...) {
     return JNI_FALSE;
+  }
+}
+
+// --- Editor mutators (G1) ---------------------------------------------------
+// Thin passthroughs to the sf_project_* mutators (PLAN_G1 §4.2). Result is the
+// SF_* code; callers map != SF_OK to lastError(handle) on the same thread.
+// All three require a non-null handled project.
+
+extern "C" JNIEXPORT jint JNICALL
+Java_id_soundforge_pastudio_platform_bridge_NativeBridge_renameProject(JNIEnv* env, jobject /*thiz*/,
+                                                                       jlong handle, jstring new_name) {
+  try {
+    return static_cast<jint>(sf_project_rename(to_handle(handle), to_std(env, new_name).c_str()));
+  } catch (const std::exception& e) {
+    log_boundary_exception(env, "renameProject", e.what());
+    return SF_E_INVALID_ARG;
+  } catch (...) {
+    log_boundary_exception(env, "renameProject", "unknown");
+    return SF_E_INVALID_ARG;
+  }
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_id_soundforge_pastudio_platform_bridge_NativeBridge_setVenueDimensions(JNIEnv* env, jobject /*thiz*/,
+                                                                           jlong handle, jdouble w,
+                                                                           jdouble d, jdouble h) {
+  try {
+    return static_cast<jint>(
+        sf_venue_set_dimensions(to_handle(handle), static_cast<double>(w),
+                                static_cast<double>(d), static_cast<double>(h)));
+  } catch (const std::exception& e) {
+    log_boundary_exception(env, "setVenueDimensions", e.what());
+    return SF_E_INVALID_ARG;
+  } catch (...) {
+    log_boundary_exception(env, "setVenueDimensions", "unknown");
+    return SF_E_INVALID_ARG;
+  }
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_id_soundforge_pastudio_platform_bridge_NativeBridge_setSceneGeometry(JNIEnv* env, jobject /*thiz*/,
+                                                                         jlong handle, jdouble cx,
+                                                                         jdouble cy, jdouble cz,
+                                                                         jdouble lx, jdouble ly,
+                                                                         jdouble lz) {
+  try {
+    return static_cast<jint>(
+        sf_scene_set_geometry(to_handle(handle), static_cast<double>(cx),
+                              static_cast<double>(cy), static_cast<double>(cz),
+                              static_cast<double>(lx), static_cast<double>(ly),
+                              static_cast<double>(lz)));
+  } catch (const std::exception& e) {
+    log_boundary_exception(env, "setSceneGeometry", e.what());
+    return SF_E_INVALID_ARG;
+  } catch (...) {
+    log_boundary_exception(env, "setSceneGeometry", "unknown");
+    return SF_E_INVALID_ARG;
   }
 }
 
