@@ -6,6 +6,7 @@
 #include "sf_internal.hpp"
 #include "soundforge/sf_graph.h"
 
+#include <array>
 #include <cmath>
 #include <string>
 
@@ -19,6 +20,16 @@ sfcore::json eval_ok(sf_project_t* p) {
     std::string s = out ? std::string(out, len) : "";
     if (out) sf_free_string(out);
     return sfcore::json::parse(s);
+}
+
+// Evaluate and return the raw dumped report (for key-order assertions).
+std::string eval_ok_str(sf_project_t* p) {
+    char* out = nullptr;
+    size_t len = 0;
+    EXPECT_EQ(sf_graph_evaluate_mixer(p, &out, &len), SF_OK);
+    std::string s = out ? std::string(out, len) : "";
+    if (out) sf_free_string(out);
+    return s;
 }
 
 int find_output(const sfcore::json& j, const std::string& node_id) {
@@ -281,5 +292,133 @@ TEST(Mixer, TopoOrderAndFlags) {
     EXPECT_EQ(static_cast<std::string>(j["order"][2]), c);
     EXPECT_EQ(j["muted"].size(), 0u);
     EXPECT_EQ(j["soloed"].size(), 0u);
+    sf_project_destroy(p);
+}
+
+// ---------------------------------------------------------------------------
+// G3 P3 — mixing-law keys (PLAN_G3 §4.1 D1, §7.1). Additive: existing cases
+// above are untouched. Multi-source graphs now aggregate coherently.
+// ---------------------------------------------------------------------------
+
+TEST(Mixer, TwoSourcesLawCoherentSum) {
+    // D1: peakGainLin = SUM over ALL routed sources (coherent worst case);
+    // the G2 aggregation was max over routes — two 0 dB sources expose it.
+    sf_project_t* p = sf_project_create("M", nullptr);
+    ASSERT_NE(p, nullptr);
+    char s1[37], s2[37], c[37], e1[37], e2[37];
+    ASSERT_EQ(sf_graph_add_node(p, SF_NODE_SOURCE, "s1", s1), SF_OK);
+    ASSERT_EQ(sf_graph_add_node(p, SF_NODE_SOURCE, "s2", s2), SF_OK);
+    ASSERT_EQ(sf_graph_add_node(p, SF_NODE_OUTPUT, "out", c), SF_OK);
+    ASSERT_EQ(sf_graph_add_edge(p, s1, c, 0, 0, e1), SF_OK);
+    ASSERT_EQ(sf_graph_add_edge(p, s2, c, 0, 0, e2), SF_OK);
+
+    sfcore::json j = eval_ok(p);
+    ASSERT_EQ(j["outputs"].size(), 1u);
+    ASSERT_EQ(j["outputs"][0]["routes"].size(), 2u);
+    const double peak = static_cast<double>(j["outputs"][0]["peakGainLin"]);
+    const double power = static_cast<double>(j["outputs"][0]["powerGainLin"]);
+    const double headroom = static_cast<double>(j["outputs"][0]["headroomDb"]);
+    const bool clipped = static_cast<bool>(j["outputs"][0]["clipped"]);
+    EXPECT_NEAR(peak, 2.0, 1e-9);              // SUM = 1 + 1 (old max: 1)
+    EXPECT_NEAR(power, std::sqrt(2.0), 1e-9);  // sqrt(1^2 + 1^2)
+    EXPECT_NEAR(headroom, -20.0 * std::log10(2.0), 1e-9);
+    EXPECT_TRUE(clipped);
+    EXPECT_EQ(clipped, headroom < 0.0);        // refactor equivalence (D1)
+    // Law bracket: max route <= power <= peak.
+    EXPECT_LE(power, peak);
+    EXPECT_GE(power, std::max(
+        static_cast<double>(j["outputs"][0]["routes"][0]["gainLin"]),
+        static_cast<double>(j["outputs"][0]["routes"][1]["gainLin"])));
+    sf_project_destroy(p);
+}
+
+TEST(Mixer, TwoSourcesLawUnequalGains) {
+    // 0 dB + -6 dB sources: peak = 1 + 10^(-6/20), power = sqrt(1 + g^2),
+    // headroom from the coherent peak; clipped <==> headroomDb < 0.
+    sf_project_t* p = sf_project_create("M", nullptr);
+    ASSERT_NE(p, nullptr);
+    char s1[37], s2[37], c[37], e1[37], e2[37];
+    ASSERT_EQ(sf_graph_add_node(p, SF_NODE_SOURCE, "s1", s1), SF_OK);
+    ASSERT_EQ(sf_graph_add_node(p, SF_NODE_SOURCE, "s2", s2), SF_OK);
+    ASSERT_EQ(sf_graph_add_node(p, SF_NODE_OUTPUT, "out", c), SF_OK);
+    ASSERT_EQ(sf_graph_set_mixer(p, s2, -6.0, 0.0, 0, 0), SF_OK);
+    ASSERT_EQ(sf_graph_add_edge(p, s1, c, 0, 0, e1), SF_OK);
+    ASSERT_EQ(sf_graph_add_edge(p, s2, c, 0, 0, e2), SF_OK);
+
+    const double g2 = std::pow(10.0, -6.0 / 20.0);
+    sfcore::json j = eval_ok(p);
+    const double peak = static_cast<double>(j["outputs"][0]["peakGainLin"]);
+    const double power = static_cast<double>(j["outputs"][0]["powerGainLin"]);
+    const double headroom = static_cast<double>(j["outputs"][0]["headroomDb"]);
+    const bool clipped = static_cast<bool>(j["outputs"][0]["clipped"]);
+    EXPECT_NEAR(peak, 1.0 + g2, 1e-9);
+    EXPECT_NEAR(power, std::sqrt(1.0 + g2 * g2), 1e-9);
+    EXPECT_NEAR(headroom, -20.0 * std::log10(1.0 + g2), 1e-9);
+    EXPECT_TRUE(clipped);               // coherent peak 1.5+ > 1.0
+    EXPECT_EQ(clipped, headroom < 0.0);
+    sf_project_destroy(p);
+}
+
+TEST(Mixer, LawKeysPresentSingleSourceUnchanged) {
+    // R-A byte-compat: single source (0 dB) — peak and power equal the route
+    // gain exactly (mag = 1), headroom 0 dB, not clipped. The G2 serialized
+    // peakGainLin value is preserved (identical double via the law sum).
+    sf_project_t* p = sf_project_create("M", nullptr);
+    ASSERT_NE(p, nullptr);
+    char a[37], c[37], e[37];
+    ASSERT_EQ(sf_graph_add_node(p, SF_NODE_SOURCE, "src", a), SF_OK);
+    ASSERT_EQ(sf_graph_add_node(p, SF_NODE_OUTPUT, "out", c), SF_OK);
+    ASSERT_EQ(sf_graph_add_edge(p, a, c, 0, 0, e), SF_OK);
+
+    sfcore::json j = eval_ok(p);
+    const double route =
+        static_cast<double>(j["outputs"][0]["routes"][0]["gainLin"]);
+    EXPECT_DOUBLE_EQ(static_cast<double>(j["outputs"][0]["peakGainLin"]), route);
+    EXPECT_NEAR(static_cast<double>(j["outputs"][0]["powerGainLin"]), route, 1e-12);
+    EXPECT_NEAR(static_cast<double>(j["outputs"][0]["headroomDb"]), 0.0, 1e-9);
+    EXPECT_FALSE(static_cast<bool>(j["outputs"][0]["clipped"]));
+    sf_project_destroy(p);
+}
+
+TEST(Mixer, LawKeysNullOnEmptyRoutes) {
+    // D1 verdict note: empty routes -> peak 0 -> headroomDb JSON null
+    // (-20*log10(0) = +Inf has no meaningful number), not clipped.
+    sf_project_t* p = sf_project_create("M", nullptr);
+    ASSERT_NE(p, nullptr);
+    char c[37];
+    ASSERT_EQ(sf_graph_add_node(p, SF_NODE_OUTPUT, "out", c), SF_OK);
+
+    sfcore::json j = eval_ok(p);
+    ASSERT_EQ(j["outputs"].size(), 1u);
+    EXPECT_EQ(j["outputs"][0]["routes"].size(), 0u);
+    EXPECT_NEAR(static_cast<double>(j["outputs"][0]["peakGainLin"]), 0.0, 1e-9);
+    EXPECT_NEAR(static_cast<double>(j["outputs"][0]["powerGainLin"]), 0.0, 1e-9);
+    EXPECT_TRUE(j["outputs"][0]["headroomDb"].is_null());
+    EXPECT_FALSE(static_cast<bool>(j["outputs"][0]["clipped"]));
+    sf_project_destroy(p);
+}
+
+TEST(Mixer, PerOutputKeysAlphabeticalWithLawKeys) {
+    // R-A verdict note: the per-output dump keeps the "sorted keys per level"
+    // property — new law keys interleave alphabetically:
+    //   clipped, headroomDb, nodeId, peakGainLin, powerGainLin, routes.
+    sf_project_t* p = sf_project_create("M", nullptr);
+    ASSERT_NE(p, nullptr);
+    char a[37], c[37], e[37];
+    ASSERT_EQ(sf_graph_add_node(p, SF_NODE_SOURCE, "src", a), SF_OK);
+    ASSERT_EQ(sf_graph_add_node(p, SF_NODE_OUTPUT, "out", c), SF_OK);
+    ASSERT_EQ(sf_graph_add_edge(p, a, c, 0, 0, e), SF_OK);
+
+    const std::string s = eval_ok_str(p);
+    const std::array<std::string, 6> keys{"\"clipped\"", "\"headroomDb\"",
+                                          "\"nodeId\"", "\"peakGainLin\"",
+                                          "\"powerGainLin\"", "\"routes\""};
+    std::size_t prev = 0;
+    for (const std::string& key : keys) {
+        const std::size_t pos = s.find(key);
+        ASSERT_NE(pos, std::string::npos) << "missing key " << key;
+        EXPECT_LT(prev, pos) << "key " << key << " out of alphabetical order";
+        prev = pos;
+    }
     sf_project_destroy(p);
 }

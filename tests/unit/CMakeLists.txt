@@ -20,6 +20,7 @@ add_executable(sf_unit_tests
     test_cmd_queue.cpp
     test_dsp_law.cpp
     test_dsp_kernels.cpp
+    test_dsp_render.cpp
 )
 
 target_include_directories(sf_unit_tests PRIVATE

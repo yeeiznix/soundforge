@@ -46,10 +46,14 @@ sf_result_t sf_graph_validate(sf_project_t* p, char* report_buf, size_t report_c
    SF_E_SCHEMA when the graph contains a cycle. malloc'd; free with sf_free_string(). */
 sf_result_t sf_graph_topological_order(sf_project_t* p, char** out_json, size_t* out_len);
 
-/* Static routing-desk evaluation (§4.3). JSON: {muted, order, outputs, soloed};
-   per output {clipped, nodeId, peakGainLin, routes}, per route
-   {gainLin, nodeIds, sourceId}. Scalar coefficients only — no audio buffers.
-   SF_E_SCHEMA on cycle. malloc'd; free with sf_free_string(). */
+/* Static routing-desk evaluation (§4.3; G3 mixing law, PLAN_G3 §4.1 D1).
+   JSON: {muted, order, outputs, soloed}; per output
+   {clipped, headroomDb, nodeId, peakGainLin, powerGainLin, routes}, per
+   route {gainLin, nodeIds, sourceId}. peakGainLin = coherent worst case
+   Σ over ALL routed sources (identical to the G2 max on single-source
+   graphs); powerGainLin = √Σg²; headroomDb = -20·log10(peak), JSON null
+   when no routes; clipped <==> headroomDb < 0. Scalar coefficients only —
+   no audio buffers. SF_E_SCHEMA on cycle. malloc'd; free with sf_free_string(). */
 sf_result_t sf_graph_evaluate_mixer(sf_project_t* p, char** out_json, size_t* out_len);
 
 #ifdef __cplusplus

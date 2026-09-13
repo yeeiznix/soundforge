@@ -111,13 +111,17 @@ TEST(DspKernel, ApplyPanHardPans) {
 }
 
 TEST(DspKernel, ApplyPanCenterEqualPower) {
-  // pan 0 -> cos(pi/4) = sin(pi/4): both channels = g/sqrt(2).
-  std::vector<float> l(4, 1.0f);
-  std::vector<float> r(4, 1.0f);
-  sfcore::dsp::apply_pan(l.data(), r.data(), 4, 0.0f);
-  for (std::size_t i = 0; i < 4; ++i) {
-    EXPECT_NEAR(l[i], 0.70710678f, 1e-6f);
-    EXPECT_NEAR(r[i], 0.70710678f, 1e-6f);
+  // ORC-P3-2(a): kernel law pinned — apply_pan(0) is the equal-power CENTER:
+  // L == R == in/sqrt(2) (~0.7071·in, -3.01 dB/channel), NOT pass-through.
+  // The render harness skips apply_pan(0) nodes instead (dsp_internal.hpp
+  // harness convention; pinned by Render.DefaultPanNodeIsPassthrough).
+  const std::vector<float> ref = sine_block(64);
+  std::vector<float> l = ref;
+  std::vector<float> r = ref;
+  sfcore::dsp::apply_pan(l.data(), r.data(), l.size(), 0.0f);
+  for (std::size_t i = 0; i < ref.size(); ++i) {
+    EXPECT_NEAR(l[i], 0.70710678f * ref[i], 1e-5f) << "i=" << i;
+    EXPECT_NEAR(r[i], 0.70710678f * ref[i], 1e-5f) << "i=" << i;
   }
 }
 

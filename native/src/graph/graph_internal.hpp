@@ -13,6 +13,13 @@
 
 namespace sfcore {
 
+// Forward decl of the D2 finite block (full type lives in dsp_internal.hpp;
+// this header must stay includable from sf_internal.hpp without pulling in
+// the sfdsp internals — declarations only need a reference).
+namespace dsp {
+struct AudioBlock;
+}
+
 enum SignalNodeKind : int { SfNodeSource = 1, SfNodeProcessor, SfNodeOutput, SfNodeBus };
 
 struct Point2 {
@@ -80,5 +87,18 @@ bool can_reach(const SignalGraphDoc& g, const std::string& from, const std::stri
 bool topological_order(const SignalGraphDoc& g, std::vector<std::string>& out_order,
                        std::string& err);
 nlohmann::json evaluate_mixer(const SignalGraphDoc& g);
+
+// Chain-render harness (dsp_render.cpp, compiled INTO sfgraph — PLAN_G3 §4.2
+// D2 / §6 P3 "Chain-render harness" row): walks the topological order and
+// renders a CALLER-OWNED finite block through every connected node's sfdsp
+// kernels. `block` is both input (its L/R/n hold the source material) and
+// output (on success it holds the rendered target-node block, same n).
+// Semantics mirror evaluate_mixer (mute/solo exclusion, pan==0 passthrough —
+// see dsp_internal.hpp apply_pan). Empty graph -> identity passthrough.
+// Unknown target id inside a non-empty graph -> silence (returns false with
+// err set); cycle -> false with err set. No allocation in the kernels; the
+// harness buffers are host-side only (G4 preallocates its pool).
+bool render_chain(const SignalGraphDoc& g, dsp::AudioBlock& block,
+                  const std::string& out_node_id, std::string& err);
 
 }  // namespace sfcore

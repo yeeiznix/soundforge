@@ -1,11 +1,14 @@
-// SoundForge G2 P4 — routing engine (§4.1: reachability, Kahn topo sort,
-// static mixer evaluation). Pure graph math on SignalGraphDoc: no SfProject
-// dependency, no audio buffers, no sample values (G3).
+// SoundForge G2 P4 / G3 P3 — routing engine (§4.1: reachability, Kahn topo
+// sort, static mixer evaluation). Pure graph math on SignalGraphDoc: no
+// SfProject dependency, no audio buffers, no sample values (G3).
 //
 // Boundary discipline (§4.3): evaluate_mixer() computes *routing-desk*
 // estimates — topological order and per-route static scalar coefficients in
-// the linear amplitude domain. `clipped:true` is a desk indicator only; NO
-// clamping is applied here (that is G3 DSP behavior).
+// the linear amplitude domain. The per-output aggregation is the G3 mixing
+// law (sfcore::dsp, PLAN_G3 §4.1 D1): peak/power sums, headroom, clip gate.
+// `clipped:true` is a desk indicator only; NO clamping is applied here
+// (that lives in the sfdsp kernels / render path, G3).
+#include "dsp_internal.hpp"
 #include "graph_internal.hpp"
 
 #include <cmath>
@@ -97,7 +100,8 @@ bool topological_order(const SignalGraphDoc& g, std::vector<std::string>& out_or
 // level, preserved by nlohmann dump):
 //
 //   top:        { muted, order, outputs, soloed }
-//   per output: { clipped, nodeId, peakGainLin, routes }
+//   per output: { clipped, headroomDb, nodeId, peakGainLin, powerGainLin,
+//                 routes }
 //   per route:  { gainLin, nodeIds, sourceId }
 //
 // Semantics:
@@ -110,8 +114,15 @@ bool topological_order(const SignalGraphDoc& g, std::vector<std::string>& out_or
 //   - Solo mode: active = soloed ∪ transitive downstream ∪ transitive
 //     upstream (upstream walk starts from soloed nodes only, so sibling
 //     branches feeding the same output stay silent).
-//   - peakGainLin = max route gainLin (0.0 when no routes); clipped =
-//     peakGainLin > 1.0 (desk indicator only — no clamping, G3).
+//   - Output aggregation = mixing law (sfcore::dsp, G3 D1): peakGainLin =
+//     coherent worst case Σ|g| over ALL routed sources (0.0 when no routes).
+//     Single-source graphs are byte-compatible with the G2 max (oracle R-A:
+//     one route -> Σ ≡ max, identical double). powerGainLin = √Σg² brackets
+//     the uncorrelated level (max ≤ power ≤ peak for gains ≥ 0); headroomDb
+//     = -20·log10(peak), null on empty routes (peak ≤ 0 -> log10 undefined);
+//     clipped <==> headroomDb < 0 (== the G2 predicate peak > 1.0 — pure
+//     refactor, log10 strictly increasing). Desk indicators only — no
+//     clamping here (G3 kernels).
 //   - On a cycle topological_order fails; we return {"error": ...} and the
 //     ABI layer maps that to SF_E_SCHEMA.
 // ---------------------------------------------------------------------------
@@ -235,21 +246,40 @@ nlohmann::json evaluate_mixer(const SignalGraphDoc& g) {
       }
     }
 
+    // Mixing-law aggregation (G3 P3, D1): ONE merge_law call per output —
+    // routing.cpp's only law call site (§4.1 / §6 P3: `routing.cpp (via
+    // sfcore::dsp::merge_law)`). peakGainLin = coherent worst case Σ|g| over
+    // ALL routed sources — identical to the G2 max for the single-source
+    // case (oracle R-A), so single-source serialized values are
+    // byte-compatible. Route gains are strictly positive (10^(gainDb/20)),
+    // so Σ|g| ≡ Σg here.
+    std::vector<double> gains;
+    gains.reserve(route_gains.size());
+    for (const auto& kv : route_gains) gains.push_back(kv.second);
+
     json routes = json::array();
-    double peak = 0.0;
     for (const auto& kv : route_gains) {
       json r = json::object();
       r["gainLin"] = kv.second;
       r["nodeIds"] = route_paths[kv.first];
       r["sourceId"] = kv.first;
       routes.push_back(r);
-      if (kv.second > peak) peak = kv.second;
     }
 
+    const dsp::MergeLaw law = dsp::merge_law(gains);
+
+    // Insertion order == key order for dump() — alphabetical per level (§4.3):
+    // clipped, headroomDb, nodeId, peakGainLin, powerGainLin, routes.
     json o = json::object();
-    o["clipped"] = peak > 1.0;
+    o["clipped"] = law.clipped;
+    if (law.headroom.valid) {
+      o["headroomDb"] = law.headroom.db;
+    } else {
+      o["headroomDb"] = json();  // null — empty routes (D1 verdict note)
+    }
     o["nodeId"] = out.id;
-    o["peakGainLin"] = peak;
+    o["peakGainLin"] = law.peak;
+    o["powerGainLin"] = law.power;
     o["routes"] = routes;
     outputs.push_back(o);
   }

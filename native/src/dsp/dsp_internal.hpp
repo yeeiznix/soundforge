@@ -37,8 +37,13 @@ using StereoKernel = void (*)(float* buf_l, float* buf_r, std::size_t n,
 using MixKernel = void (*)(float* out, const float* in, std::size_t n);
 
 // ---------------------------------------------------------------------------
-// AudioBlock — finite block the P3 chain-render harness pushes through nodes
-// (D2). Stereo interleaving is the harness's concern; kernels stay mono.
+// AudioBlock — the D2 block shape, NOW LIVE as the chain-render harness's
+// caller-owned finite block (render_chain in sfcore, dsp_render.cpp). L/R are
+// the stereo PCM arrays (mono sources duplicate into both channels); n = the
+// samples in this call (<= kBlockMaxSamples — the arrays are fixed-size, so
+// render_chain processes one block per call and the harness/test slices
+// longer streams into blocks); gainLin = the block's nominal linear gain
+// (10^(gainDb/20); informational — node gains come from the graph mixers).
 // ---------------------------------------------------------------------------
 struct AudioBlock {
   float L[kBlockMaxSamples];
@@ -79,6 +84,22 @@ MaybeHeadroom headroom_db(double peak);
 // Law-derived clip gate: peak > 1.0 (same predicate as the G2 desk estimate).
 bool clipped(double peak);
 
+// ---------------------------------------------------------------------------
+// merge_law — the ONE D1 call site (P3): evaluate_mixer (routing.cpp) merges
+// one output's route-gain vector through the entire law in a single call, so
+// the desk and the render path share the same code. Semantics are exactly
+// the four functions above composed: peak = coherent worst case Σ|g|,
+// power = √Σg², headroom = -20·log10(peak) (invalid <=> peak <= 0: JSON
+// null, no-routes case), clipped <==> peak > 1.0.
+// ---------------------------------------------------------------------------
+struct MergeLaw {
+  double peak = 0.0;          // coherent worst case (Σ|g|)
+  double power = 0.0;         // incoherent estimate (√Σg²)
+  MaybeHeadroom headroom;     // valid=false <=> no routes (silence)
+  bool clipped = false;       // peak > 1.0 <==> headroom.db < 0
+};
+MergeLaw merge_law(std::span<const double> sources);
+
 // Per-channel-bound property (oracle R-A(c), PLAN_G3 §4.2 verdict note):
 // the scalar law never *understates* per-channel clip risk. Equal-power pan
 // bounds each channel by the scalar gain (cos^2 theta, sin^2 theta <= 1), so
@@ -101,6 +122,21 @@ void apply_gain(float* buf, std::size_t n, float gain_lin);
 // L = cos(theta), R = sin(theta) -> L^2 + R^2 == 1 across the sweep.
 // Hard pan -1 -> {L=g, R=0}, +1 -> {L=0, R=g}. Pan is clamped to [-1, 1]
 // defensively (contract is already [-1, 1]).
+//
+// KERNEL LAW (unconditional): pan == 0 -> center, theta = pi/4, so
+// L = R = cos(pi/4) = 1/sqrt(2) ~ 0.7071 (-3.01 dB per channel). Calling
+// apply_pan with 0.0 NEVER passes through — it applies the equal-power
+// center. Pinned by DspKernel.ApplyPanCenterEqualPower.
+//
+// HARNESS CONVENTION (dsp_render.cpp, PLAN_G3 §6 P3 acceptance): the engine
+// treats pan == 0.0 (the node default) as "no pan operation" — render_chain
+// calls apply_pan ONLY for nodes with pan != 0 and leaves pan == 0 nodes
+// untouched (pass-through), mirroring evaluate_mixer's §4.3 boundary note
+// (the desk estimate ignores pan entirely at pan == 0). A default-pan
+// src(-6 dB) -> out chain therefore renders a DC block to exactly half
+// amplitude (10^(-6/20)); a pan == 0 unity-gain chain is a pure passthrough.
+// The two coexist by design: the kernel law pins what apply_pan(0) DOES; the
+// harness convention pins when apply_pan is called at all.
 void apply_pan(float* buf_l, float* buf_r, std::size_t n, float pan);
 
 // Hard gate: gain 0.0 when gate < 0.5, 1.0 otherwise (mute/solo role).

@@ -14,6 +14,5 @@ set_target_properties(sfdsp PROPERTIES
   CXX_STANDARD_REQUIRED ON
 )
 
-# Math/error utilities (PLAN_G3 D2: sfcore::dsp lives in sfcore's namespace;
-# sfcore is a sibling STATIC lib — same pattern as graph -> core).
-target_link_libraries(sfdsp PRIVATE sfcore)
+# Leaf library: no dependencies (ORC-P2-001 — law/kernels use zero sfcore
+# symbols; keeps the link graph acyclic: graph -> dsp -> nothing).

@@ -84,6 +84,7 @@ TEST(DspLaw, PowerBracketsPeak) {
   const double peak = sfcore::dsp::peak_gain_lin(gains);
   const double power = sfcore::dsp::power_gain_lin(gains);
   EXPECT_LE(power, peak);
+  EXPECT_GE(power, 3.0);  // max magnitude of the set {0.5, 1.0, -2.0, 3.0}
   // power = sqrt(0.25 + 1 + 4 + 9) = sqrt(14.25) ~ 3.775 < 6.5
   EXPECT_NEAR(power, std::sqrt(14.25), 1e-12);
 }
@@ -143,4 +144,45 @@ TEST(DspLaw, ClippedEquivalentToHeadroomNegative) {
     const bool hr_equiv = peak > 0.0 && hr(peak).db < 0.0;
     EXPECT_EQ(law, hr_equiv) << "peak=" << peak;
   }
+}
+
+// ---------------------------------------------------------------------------
+// merge_law — D1 single call site (PLAN_G3 §4.1 / §6 P3: routing.cpp calls
+// the ENTIRE law through merge_law; the render path shares the same code).
+// ---------------------------------------------------------------------------
+
+TEST(DspLaw, MergeLawMatchesComposition) {
+  // merge_law must be exactly the four law functions composed — same values,
+  // same null-on-empty and clip semantics (evaluate_mixer's numbers depend on
+  // byte-for-byte equality with the G2 single-source values).
+  const std::array<double, 4> gains{0.5, 1.0, -2.0, 3.0};
+  const sfcore::dsp::MergeLaw m = sfcore::dsp::merge_law(gains);
+
+  const double peak = sfcore::dsp::peak_gain_lin(gains);
+  const double power = sfcore::dsp::power_gain_lin(gains);
+  const sfcore::dsp::MaybeHeadroom h = sfcore::dsp::headroom_db(peak);
+
+  EXPECT_DOUBLE_EQ(m.peak, peak);
+  EXPECT_DOUBLE_EQ(m.power, power);
+  EXPECT_EQ(m.headroom.valid, h.valid);
+  EXPECT_DOUBLE_EQ(m.headroom.db, h.db);
+  EXPECT_EQ(m.clipped, sfcore::dsp::clipped(peak));
+
+  // Sanity spot-checks of the values themselves.
+  EXPECT_DOUBLE_EQ(m.peak, 6.5);            // |0.5|+|1|+|-2|+|3|
+  EXPECT_NEAR(m.power, std::sqrt(14.25), 1e-12);
+  EXPECT_TRUE(m.clipped);                   // peak 6.5 > 1.0
+  EXPECT_TRUE(m.headroom.valid);
+  EXPECT_NEAR(m.headroom.db, -20.0 * std::log10(6.5), 1e-12);
+}
+
+TEST(DspLaw, MergeLawEmptyRoutesNullHeadroom) {
+  // Empty route-gain vector: peak 0 -> headroom invalid (JSON null), clip
+  // gate off — the D1 no-routes posture.
+  const std::array<double, 0> empty{};
+  const sfcore::dsp::MergeLaw m = sfcore::dsp::merge_law(empty);
+  EXPECT_DOUBLE_EQ(m.peak, 0.0);
+  EXPECT_DOUBLE_EQ(m.power, 0.0);
+  EXPECT_FALSE(m.headroom.valid);
+  EXPECT_FALSE(m.clipped);
 }

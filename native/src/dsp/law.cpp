@@ -41,4 +41,18 @@ MaybeHeadroom headroom_db(double peak) {
 // ---------------------------------------------------------------------------
 bool clipped(double peak) { return peak > 1.0; }
 
+// ---------------------------------------------------------------------------
+// merge_law — D1 single call site (PLAN_G3 §4.1 / §6 P3): composes the four
+// functions above for one output's route-gain vector. evaluate_mixer
+// (routing.cpp) is the only caller; the render path shares this same law.
+// ---------------------------------------------------------------------------
+MergeLaw merge_law(std::span<const double> sources) {
+  MergeLaw m;
+  m.peak = peak_gain_lin(sources);
+  m.power = power_gain_lin(sources);
+  m.headroom = headroom_db(m.peak);
+  m.clipped = clipped(m.peak);
+  return m;
+}
+
 }  // namespace sfcore::dsp
