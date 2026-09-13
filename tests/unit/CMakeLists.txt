@@ -18,6 +18,8 @@ add_executable(sf_unit_tests
     test_graph_validate.cpp
     test_graph_mixer.cpp
     test_cmd_queue.cpp
+    test_dsp_law.cpp
+    test_dsp_kernels.cpp
 )
 
 target_include_directories(sf_unit_tests PRIVATE
@@ -25,6 +27,7 @@ target_include_directories(sf_unit_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party
     ${CMAKE_SOURCE_DIR}/src/core
     ${CMAKE_SOURCE_DIR}/src/graph
+    ${CMAKE_SOURCE_DIR}/src/dsp
 )
 
 target_compile_definitions(sf_unit_tests PRIVATE
@@ -34,6 +37,7 @@ target_compile_definitions(sf_unit_tests PRIVATE
 
 target_link_libraries(sf_unit_tests PRIVATE
     sfcore
+    sfdsp
     gtest_main
     stdc++fs
 )
