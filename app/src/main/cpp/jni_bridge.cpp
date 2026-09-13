@@ -8,6 +8,10 @@
 // G0: synchronous calls; G2 introduces SfCommandQueue for audio-thread safety.
 // G1: 16 exported functions (12 + renameProject, renameVenue,
 // setVenueDimensions, setSceneGeometry) — one per NativeBridge external fun.
+// G2: 25 exported functions (16 + 9 sf_graph_* passthroughs: graphAddNode,
+// graphRemoveNode, graphAddEdge, graphRemoveEdge, graphSetMixer,
+// graphSetPreset, graphValidate, graphTopologicalOrder, graphEvaluateMixer) —
+// one per NativeBridge external fun (PLAN_G2 §4.6).
 #include <jni.h>
 #include <android/log.h>
 
@@ -18,6 +22,7 @@
 #include "soundforge/sf_diagnostics.h"
 #include "soundforge/sf_project.h"
 #include "soundforge/sf_schema.h"  // sf_validate_project_json
+#include "soundforge/sf_graph.h"   // sf_graph_* (G2 §4.2/§4.6)
 
 namespace {
 
@@ -192,6 +197,203 @@ Java_id_soundforge_pastudio_platform_bridge_NativeBridge_setSceneGeometry(JNIEnv
   } catch (...) {
     log_boundary_exception(env, "setSceneGeometry", "unknown");
     return SF_E_INVALID_ARG;
+  }
+}
+
+// --- Graph editor (G2) ------------------------------------------------------
+// Thin passthroughs to the sf_graph_* C ABI (PLAN_G2 §4.2/§4.6). Node/edge ids
+// return as strings ("" on error), mutators as SF_* codes; on failure callers
+// read lastError(handle) on the same thread, exactly like the G1 editors.
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_id_soundforge_pastudio_platform_bridge_NativeBridge_graphAddNode(JNIEnv* env, jobject /*thiz*/,
+                                                                      jlong handle, jint kind,
+                                                                      jstring name) {
+  try {
+    char id[37];  // 36-char UUID + NUL (sf_graph.h contract)
+    const sf_result_t rc = sf_graph_add_node(to_handle(handle), static_cast<int32_t>(kind),
+                                             to_std(env, name).c_str(), id);
+    if (rc != SF_OK || id[0] == '\0') return env->NewStringUTF("");  // caller reads lastError
+    return env->NewStringUTF(id);
+  } catch (const std::exception& e) {
+    log_boundary_exception(env, "graphAddNode", e.what());
+    return env->NewStringUTF("");
+  } catch (...) {
+    log_boundary_exception(env, "graphAddNode", "unknown");
+    return env->NewStringUTF("");
+  }
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_id_soundforge_pastudio_platform_bridge_NativeBridge_graphRemoveNode(JNIEnv* env, jobject /*thiz*/,
+                                                                         jlong handle, jstring node_id) {
+  try {
+    return static_cast<jint>(sf_graph_remove_node(to_handle(handle), to_std(env, node_id).c_str()));
+  } catch (const std::exception& e) {
+    log_boundary_exception(env, "graphRemoveNode", e.what());
+    return SF_E_INVALID_ARG;
+  } catch (...) {
+    log_boundary_exception(env, "graphRemoveNode", "unknown");
+    return SF_E_INVALID_ARG;
+  }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_id_soundforge_pastudio_platform_bridge_NativeBridge_graphAddEdge(JNIEnv* env, jobject /*thiz*/,
+                                                                      jlong handle, jstring from_id,
+                                                                      jstring to_id, jint from_port,
+                                                                      jint to_port) {
+  try {
+    char id[37];  // 36-char UUID + NUL
+    const sf_result_t rc = sf_graph_add_edge(
+        to_handle(handle), to_std(env, from_id).c_str(), to_std(env, to_id).c_str(),
+        static_cast<int32_t>(from_port), static_cast<int32_t>(to_port), id);
+    if (rc != SF_OK || id[0] == '\0') return env->NewStringUTF("");
+    return env->NewStringUTF(id);
+  } catch (const std::exception& e) {
+    log_boundary_exception(env, "graphAddEdge", e.what());
+    return env->NewStringUTF("");
+  } catch (...) {
+    log_boundary_exception(env, "graphAddEdge", "unknown");
+    return env->NewStringUTF("");
+  }
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_id_soundforge_pastudio_platform_bridge_NativeBridge_graphRemoveEdge(JNIEnv* env, jobject /*thiz*/,
+                                                                         jlong handle, jstring edge_id) {
+  try {
+    return static_cast<jint>(sf_graph_remove_edge(to_handle(handle), to_std(env, edge_id).c_str()));
+  } catch (const std::exception& e) {
+    log_boundary_exception(env, "graphRemoveEdge", e.what());
+    return SF_E_INVALID_ARG;
+  } catch (...) {
+    log_boundary_exception(env, "graphRemoveEdge", "unknown");
+    return SF_E_INVALID_ARG;
+  }
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_id_soundforge_pastudio_platform_bridge_NativeBridge_graphSetMixer(JNIEnv* env, jobject /*thiz*/,
+                                                                       jlong handle, jstring node_id,
+                                                                       jdouble gain_db, jdouble pan,
+                                                                       jboolean mute, jboolean solo) {
+  try {
+    return static_cast<jint>(sf_graph_set_mixer(
+        to_handle(handle), to_std(env, node_id).c_str(), static_cast<double>(gain_db),
+        static_cast<double>(pan), mute == JNI_TRUE ? 1 : 0, solo == JNI_TRUE ? 1 : 0));
+  } catch (const std::exception& e) {
+    log_boundary_exception(env, "graphSetMixer", e.what());
+    return SF_E_INVALID_ARG;
+  } catch (...) {
+    log_boundary_exception(env, "graphSetMixer", "unknown");
+    return SF_E_INVALID_ARG;
+  }
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_id_soundforge_pastudio_platform_bridge_NativeBridge_graphSetPreset(JNIEnv* env, jobject /*thiz*/,
+                                                                        jlong handle, jstring node_id,
+                                                                        jstring preset_id) {
+  try {
+    // "" preset_id clears the reference (sf_graph.h contract).
+    return static_cast<jint>(sf_graph_set_preset(
+        to_handle(handle), to_std(env, node_id).c_str(), to_std(env, preset_id).c_str()));
+  } catch (const std::exception& e) {
+    log_boundary_exception(env, "graphSetPreset", e.what());
+    return SF_E_INVALID_ARG;
+  } catch (...) {
+    log_boundary_exception(env, "graphSetPreset", "unknown");
+    return SF_E_INVALID_ARG;
+  }
+}
+
+// --- Graph routing queries (G2) ---------------------------------------------
+
+// Structural report; "" on error (e.g. report buffer too small). The report is
+// VALID even when the graph has warnings/errors (SF_E_SCHEMA) — only
+// INVALID_ARG/NOMEM failures map to "".
+extern "C" JNIEXPORT jstring JNICALL
+Java_id_soundforge_pastudio_platform_bridge_NativeBridge_graphValidate(JNIEnv* env, jobject /*thiz*/,
+                                                                       jlong handle) {
+  try {
+    std::string report(64 * 1024, '\0');  // heap-backed; editor graphs stay small
+    const sf_result_t rc = sf_graph_validate(to_handle(handle), report.data(), report.size());
+    if (rc != SF_OK && rc != SF_E_SCHEMA) return env->NewStringUTF("");  // caller reads lastError
+    return env->NewStringUTF(report.c_str());
+  } catch (const std::exception& e) {
+    log_boundary_exception(env, "graphValidate", e.what());
+    return env->NewStringUTF("");
+  } catch (...) {
+    log_boundary_exception(env, "graphValidate", "unknown");
+    return env->NewStringUTF("");
+  }
+}
+
+// Malloc'd JSON (freed with sf_free_string); 16 MiB cap matches projectToJson.
+extern "C" JNIEXPORT jstring JNICALL
+Java_id_soundforge_pastudio_platform_bridge_NativeBridge_graphTopologicalOrder(JNIEnv* env,
+                                                                               jobject /*thiz*/,
+                                                                               jlong handle) {
+  char* json = nullptr;
+  size_t len = 0;
+  try {
+    const sf_result_t rc = sf_graph_topological_order(to_handle(handle), &json, &len);
+    if (rc != SF_OK || json == nullptr) {
+      if (json != nullptr) sf_free_string(json);
+      return env->NewStringUTF("");  // e.g. "graph.topologicalOrder: cycle detected"
+    }
+    constexpr size_t kMaxJsonBytes = 16 * 1024 * 1024;  // 16 MiB
+    if (len > kMaxJsonBytes) {
+      sf_free_string(json);
+      __android_log_print(ANDROID_LOG_ERROR, "SF/jni",
+                          "graphTopologicalOrder: report too large (%zu bytes)", len);
+      return env->NewStringUTF("");
+    }
+    jstring out = env->NewStringUTF(json);
+    sf_free_string(json);
+    return out;
+  } catch (const std::exception& e) {
+    if (json != nullptr) sf_free_string(json);
+    log_boundary_exception(env, "graphTopologicalOrder", e.what());
+    return env->NewStringUTF("");
+  } catch (...) {
+    if (json != nullptr) sf_free_string(json);
+    log_boundary_exception(env, "graphTopologicalOrder", "unknown");
+    return env->NewStringUTF("");
+  }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_id_soundforge_pastudio_platform_bridge_NativeBridge_graphEvaluateMixer(JNIEnv* env,
+                                                                            jobject /*thiz*/,
+                                                                            jlong handle) {
+  char* json = nullptr;
+  size_t len = 0;
+  try {
+    const sf_result_t rc = sf_graph_evaluate_mixer(to_handle(handle), &json, &len);
+    if (rc != SF_OK || json == nullptr) {
+      if (json != nullptr) sf_free_string(json);
+      return env->NewStringUTF("");  // cycle or null argument
+    }
+    constexpr size_t kMaxJsonBytes = 16 * 1024 * 1024;  // 16 MiB
+    if (len > kMaxJsonBytes) {
+      sf_free_string(json);
+      __android_log_print(ANDROID_LOG_ERROR, "SF/jni",
+                          "graphEvaluateMixer: report too large (%zu bytes)", len);
+      return env->NewStringUTF("");
+    }
+    jstring out = env->NewStringUTF(json);
+    sf_free_string(json);
+    return out;
+  } catch (const std::exception& e) {
+    if (json != nullptr) sf_free_string(json);
+    log_boundary_exception(env, "graphEvaluateMixer", e.what());
+    return env->NewStringUTF("");
+  } catch (...) {
+    if (json != nullptr) sf_free_string(json);
+    log_boundary_exception(env, "graphEvaluateMixer", "unknown");
+    return env->NewStringUTF("");
   }
 }
 

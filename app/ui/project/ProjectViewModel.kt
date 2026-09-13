@@ -24,6 +24,8 @@ import kotlinx.coroutines.sync.withLock
 import id.soundforge.pastudio.scene.Pt3
 import id.soundforge.pastudio.scene.SceneKt
 import id.soundforge.pastudio.scene.projectSceneOf
+import id.soundforge.pastudio.signal.SignalGraphKt
+import id.soundforge.pastudio.signal.projectSignalGraphOf
 import id.soundforge.pastudio.venue.VenueKt
 import id.soundforge.pastudio.venue.projectVenueOf
 import org.json.JSONObject
@@ -37,8 +39,10 @@ sealed interface UiState {
     data class Ready(
         val meta: ProjectMetaKt,
         val healthReport: String?,
+        val handle: Long = 0L,
         val scene: SceneKt? = null,
         val venue: VenueKt? = null,
+        val signalGraph: SignalGraphKt? = null,
     ) : UiState
 
     /** The last create/open/save attempt failed; no usable handle. */
@@ -75,9 +79,10 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
 
     /**
      * Serializes all native-handle-touching work; close() joins via the same
-     * mutex (sf_project_* is not thread-safe per handle).
+     * mutex (sf_project_* is not thread-safe per handle). Shared with the G2
+     * graph ViewModels (PLAN_G2 §4.6): ONE mutex per handle, not per VM.
      */
-    private val nativeMutex = Mutex()
+    internal val nativeMutex = Mutex()
 
     /** Opaque native project handle; 0L = none. Mutated only inside coroutines. */
     @Volatile var handle: Long = 0L
@@ -188,6 +193,18 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    /** Re-parse the committed document into [UiState.Ready] without touching
+     *  the handle (committed-doc-is-truth). Called by the G2 graph ViewModels
+     *  after a successful sf_graph_* commit — call OUTSIDE a nativeMutex
+     *  withLock block (it takes the lock itself; Mutex is not reentrant). */
+    internal fun refreshState() {
+        viewModelScope.launch(Dispatchers.IO) {
+            nativeMutex.withLock {
+                if (handle != 0L) _state.value = readyState(handle, currentName())
+            }
+        }
+    }
+
     private fun currentName(): String =
         (_state.value as? UiState.Ready)?.meta?.name ?: "Untitled"
 
@@ -232,8 +249,10 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
                             meta = previous?.meta?.copy(modifiedAt = isoNow())
                                 ?: parseMeta(json, File(path).nameWithoutExtension),
                             healthReport = previous?.healthReport,
+                            handle = previous?.handle ?: 0L,
                             scene = previous?.scene,
                             venue = previous?.venue,
+                            signalGraph = previous?.signalGraph,
                         )
                     }
                     .onFailure { error ->
@@ -283,8 +302,10 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
         return UiState.Ready(
             meta = meta,
             healthReport = health,
+            handle = nativeHandle,
             scene = root?.let { projectSceneOf(it) },
             venue = root?.let { projectVenueOf(it) },
+            signalGraph = root?.let { projectSignalGraphOf(it) },
         )
     }
 

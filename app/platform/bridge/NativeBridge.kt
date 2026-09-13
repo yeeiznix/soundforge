@@ -5,8 +5,8 @@
 //
 // JNI_OnLoad (native side) installs a logcat log sink via sf_set_log_sink, so
 // every sf_log line appears under "SF/<tag>" with no Java-side callback.
-// 16 external funs below — their symbols use the full JNI prefix
-// Java_id_soundforge_pastudio_platform_bridge_NativeBridge_<name>.
+// 25 external funs below (16 G0/G1 + 9 G2 graph) — their symbols use the full
+// JNI prefix Java_id_soundforge_pastudio_platform_bridge_NativeBridge_<name>.
 //
 // G0: synchronous calls; G2 introduces SfCommandQueue for audio-thread safety.
 package id.soundforge.pastudio.platform.bridge
@@ -29,6 +29,26 @@ object NativeBridge {
     external fun setVenueDimensions(handle: Long, w: Double, d: Double, h: Double): Int
     external fun setSceneGeometry(handle: Long, cx: Double, cy: Double, cz: Double,
                                   lx: Double, ly: Double, lz: Double): Int
+
+    // --- Graph editor (G2) ---------------------------------------------------
+    // Signal-graph edits (PLAN_G2 §4.6), passthroughs to the sf_graph_* C ABI.
+    // Node/edge ids return as strings ("" on error — read lastError(handle));
+    // mutators return SF_* codes like the G1 editors.
+    external fun graphAddNode(handle: Long, kind: Int, name: String): String // new node UUID, "" on error
+    external fun graphRemoveNode(handle: Long, nodeId: String): Int
+    external fun graphAddEdge(handle: Long, fromId: String, toId: String,
+                              fromPort: Int, toPort: Int): String // new edge UUID, "" on error
+    external fun graphRemoveEdge(handle: Long, edgeId: String): Int
+    external fun graphSetMixer(handle: Long, nodeId: String, gainDb: Double, pan: Double,
+                               mute: Boolean, solo: Boolean): Int
+    external fun graphSetPreset(handle: Long, nodeId: String, presetId: String): Int // "" clears
+
+    // Structural routing reports as JSON strings; "" on error (lastError).
+    // graphTopologicalOrder / graphEvaluateMixer fail with SF_E_SCHEMA on
+    // cycles — read lastError(handle) for the reason.
+    external fun graphValidate(handle: Long): String
+    external fun graphTopologicalOrder(handle: Long): String
+    external fun graphEvaluateMixer(handle: Long): String
 
     // --- Lifecycle -----------------------------------------------------------
     // Handles are opaque jlongs; 0L means "no project". On failure the core
