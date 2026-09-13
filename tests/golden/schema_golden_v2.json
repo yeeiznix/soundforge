@@ -208,7 +208,9 @@
           "required": ["mute", "solo"],
           "properties": {
             "mute": { "type": "boolean" },
-            "solo": { "type": "boolean" }
+            "solo": { "type": "boolean" },
+            "gainDb": { "type": "number" },
+            "pan": { "type": "number" }
           }
         }
       }
@@ -220,7 +222,8 @@
       "properties": {
         "from": { "type": "string", "format": "uuid" },
         "to": { "type": "string", "format": "uuid" },
-        "label": { "type": "string" }
+        "label": { "type": "string" },
+        "id": { "type": "string", "format": "uuid" }
       }
     },
     "signalMixerState": {

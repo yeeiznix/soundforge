@@ -243,6 +243,10 @@ bool validate_doc_json(const json& j, std::string& errOut) {
         } else {
           check_bool(n["mixer"], "mute", (nctx + ".mixer").c_str());
           check_bool(n["mixer"], "solo", (nctx + ".mixer").c_str());
+          if (n["mixer"].contains("gainDb") && !n["mixer"]["gainDb"].is_number())
+            add(nctx + ".mixer: 'gainDb' must be a number");
+          if (n["mixer"].contains("pan") && !n["mixer"]["pan"].is_number())
+            add(nctx + ".mixer: 'pan' must be a number");
         }
         ++ni;
       }
@@ -288,6 +292,13 @@ bool validate_doc_json(const json& j, std::string& errOut) {
           add(ectx + ": missing 'label'");
         } else if (!e["label"].is_string()) {
           add(ectx + ": 'label' must be a string");
+        }
+        if (e.contains("id")) {
+          if (!e["id"].is_string()) {
+            add(ectx + ": 'id' must be a string");
+          } else if (!is_uuid(e["id"].get<std::string>())) {
+            add(ectx + ": invalid uuid '" + e["id"].get<std::string>() + "'");
+          }
         }
         if (has_from && has_to) adj[from].push_back(to);
         ++ei;

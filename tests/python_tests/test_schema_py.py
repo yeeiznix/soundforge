@@ -70,8 +70,9 @@ def test_golden_v2_immutable():
     import hashlib
     path = REPO_ROOT / "tests" / "golden" / "schema_golden_v2.json"
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    # SHA-256 computed from the regenerated file (byte-identical to project_schema.json)
-    assert digest == "48bd5b70b001ca79c7b5c3ead1aab523ceb6964c622568d7c6d65772a29e627e"
+    # SHA-256 computed from the regenerated file (byte-identical to project_schema.json).
+    # G2 P7: additive refresh — node.mixer gains gainDb/pan, signalEdge gains id.
+    assert digest == "5888afd57750da70e42a87e1b35b405201a5b3568b2d79f85914e20f25f27aea"
 
 
 def test_validate_signalgraph_v2():

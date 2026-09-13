@@ -6,11 +6,13 @@
 //
 // JSON shape mirrored here (project_v2.json $defs.signalNode / signalEdge):
 //   signalGraph: { nodes: [ { kind: "source"|"processor"|"output"|"bus",
-//                            id, label, position: {x, y}, mixer: {mute, solo} } ],
-//                  edges: [ { from, to, label } ] }
-// The v2 wire intentionally omits gainDb/pan, dspPresetRef, and edge ids/ports
-// (PLAN_G2 §4.2) — those fields parse to defaults and are tracked locally by
-// the ViewModels; committed-doc-is-truth still holds for everything on the wire.
+//                            id, label, position: {x, y},
+//                            mixer: {mute, solo, gainDb, pan} } ],
+//                  edges: [ { from, to, label, id } ] }
+// gainDb/pan and edge ids cross the wire as of P7 (additive schema refresh,
+// schemaVersion stays 2); dspPresetRef and edge ports are still off-wire —
+// they parse to defaults and are tracked locally by the ViewModels.
+// Committed-doc-is-truth holds for everything on the wire.
 package id.soundforge.pastudio.signal
 
 import org.json.JSONObject
@@ -37,9 +39,9 @@ fun signalNodeKindName(kind: Int): String = when (kind) {
     else -> "source"
 }
 
-/** Read-only signal-node snapshot. gainDb/pan/dspPresetRef are NOT on the v2
- *  wire (they are mixer-setter inputs); they default and the ViewModels track
- *  the latest committed values locally. */
+/** Read-only signal-node snapshot. gainDb/pan/mute/solo are on the wire;
+ *  dspPresetRef is NOT (mixer-setter input) — it defaults to "" and the
+ *  ViewModels track the latest committed value locally. */
 data class SignalNodeKt(
     val id: String,
     val kind: Int,          // SF_NODE_* (1..4)
@@ -53,8 +55,8 @@ data class SignalNodeKt(
     val dspPresetRef: String = "", // not on the v2 wire; "" = none
 )
 
-/** Read-only signal-edge snapshot. Edge ids and ports are NOT on the v2 wire;
- *  they default ("" / 0) until P3+ documents carry them. */
+/** Read-only signal-edge snapshot. The edge id is on the wire as of P7 (so
+ *  removeEdge can target it); ports are NOT — they default to 0. */
 data class SignalEdgeKt(
     val id: String = "",        // not on the v2 wire
     val fromNodeId: String,     // wire "from"
@@ -92,6 +94,8 @@ private fun signalNodeOf(node: JSONObject): SignalNodeKt? = runCatching {
         name = node.optString("label", ""),
         x = position?.optDouble("x", 0.0) ?: 0.0,
         y = position?.optDouble("y", 0.0) ?: 0.0,
+        gainDb = mixer?.optDouble("gainDb", 0.0) ?: 0.0,
+        pan = mixer?.optDouble("pan", 0.0) ?: 0.0,
         mute = mixer?.optBoolean("mute", false) ?: false,
         solo = mixer?.optBoolean("solo", false) ?: false,
     )
@@ -99,6 +103,7 @@ private fun signalNodeOf(node: JSONObject): SignalNodeKt? = runCatching {
 
 private fun signalEdgeOf(edge: JSONObject): SignalEdgeKt? = runCatching {
     SignalEdgeKt(
+        id = edge.optString("id", ""),
         fromNodeId = edge.optString("from", ""),
         toNodeId = edge.optString("to", ""),
     )

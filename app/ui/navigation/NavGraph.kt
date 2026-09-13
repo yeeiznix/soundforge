@@ -2,6 +2,7 @@
 package id.soundforge.pastudio.navigation
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -15,6 +16,7 @@ import id.soundforge.pastudio.dsp.DspChainScreen
 import id.soundforge.pastudio.home.HomeScreen
 import id.soundforge.pastudio.measurement.MeasurementScreen
 import id.soundforge.pastudio.mixer.MixerScreen
+import id.soundforge.pastudio.mixer.MixerViewModel
 import id.soundforge.pastudio.prediction.PredictionScreen
 import id.soundforge.pastudio.project.ProjectListScreen
 import id.soundforge.pastudio.project.ProjectViewModel
@@ -22,6 +24,7 @@ import id.soundforge.pastudio.project.UiState
 import id.soundforge.pastudio.reports.ReportsScreen
 import id.soundforge.pastudio.scene.SceneEditorScreen
 import id.soundforge.pastudio.signal.SignalEditorScreen
+import id.soundforge.pastudio.signal.SignalGraphViewModel
 import id.soundforge.pastudio.training.TrainingScreen
 import id.soundforge.pastudio.venue.VenueScreen
 
@@ -36,6 +39,19 @@ import id.soundforge.pastudio.venue.VenueScreen
 fun SoundForgeNavGraph(navController: NavHostController = rememberNavController()) {
     val projectViewModel: ProjectViewModel = viewModel()
     val uiState by projectViewModel.state.collectAsState()
+
+    // P7: the signal/mixer editors share the activity-scoped ProjectViewModel;
+    // their graph VMs are hoisted here too and bound once a project is open
+    // (bind is idempotent, so repeat Ready refreshes are safe).
+    val signalGraphViewModel: SignalGraphViewModel = viewModel()
+    val mixerViewModel: MixerViewModel = viewModel()
+    val readyState = uiState as? UiState.Ready
+    LaunchedEffect(readyState) {
+        if (readyState != null) {
+            signalGraphViewModel.bind(projectViewModel)
+            mixerViewModel.bind(projectViewModel)
+        }
+    }
 
     NavHost(navController = navController, startDestination = Route.Home.path) {
         composable(Route.Home.path) {
@@ -95,14 +111,37 @@ fun SoundForgeNavGraph(navController: NavHostController = rememberNavController(
             route = Route.Signal.path + "?projectId={projectId}",
             arguments = listOf(projectIdArgument()),
         ) { entry ->
-            SignalEditorScreen(projectId = entry.arguments?.getString("projectId"))
+            SignalEditorScreen(
+                projectId = entry.arguments?.getString("projectId"),
+                signalGraph = (uiState as? UiState.Ready)?.signalGraph,
+                errorMessage = (uiState as? UiState.Error)?.message,
+                readLastEditError = { projectViewModel.lastEditError },
+                onAddNode = { kind, name -> signalGraphViewModel.addNode(kind, name) },
+                onRemoveNode = { id -> signalGraphViewModel.removeNode(id) },
+                onAddEdge = { from, to, fromPort, toPort ->
+                    signalGraphViewModel.addEdge(from, to, fromPort, toPort)
+                },
+                onRemoveEdge = { id -> signalGraphViewModel.removeEdge(id) },
+                onNavigateBack = { navController.popBackStack() },
+            )
         }
 
         composable(
             route = Route.Mixer.path + "?projectId={projectId}",
             arguments = listOf(projectIdArgument()),
         ) { entry ->
-            MixerScreen(projectId = entry.arguments?.getString("projectId"))
+            MixerScreen(
+                projectId = entry.arguments?.getString("projectId"),
+                signalGraph = (uiState as? UiState.Ready)?.signalGraph,
+                errorMessage = (uiState as? UiState.Error)?.message,
+                readLastEditError = { projectViewModel.lastEditError },
+                onSetMixer = { nodeId, gainDb, pan, mute, solo ->
+                    mixerViewModel.setMixer(nodeId, gainDb, pan, mute, solo)
+                },
+                onSetPreset = { nodeId, presetId -> mixerViewModel.setPreset(nodeId, presetId) },
+                onEvaluateRouting = { mixerViewModel.evaluateMixerReport() },
+                onNavigateBack = { navController.popBackStack() },
+            )
         }
 
         composable(

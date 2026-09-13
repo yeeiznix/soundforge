@@ -121,7 +121,10 @@ json doc_to_json(const SfProjectDoc& d) {
     n["id"] = node.id;
     n["label"] = node.name;
     n["position"] = {{"x", node.position.x}, {"y", node.position.y}};
-    n["mixer"] = {{"mute", node.mixer.mute}, {"solo", node.mixer.solo}};
+    n["mixer"] = {{"mute", node.mixer.mute},
+                  {"solo", node.mixer.solo},
+                  {"gainDb", node.mixer.gainDb},
+                  {"pan", node.mixer.pan}};
     nodes.push_back(n);
   }
   json edges = json::array();
@@ -130,6 +133,7 @@ json doc_to_json(const SfProjectDoc& d) {
     e["from"] = edge.fromNodeId;
     e["to"] = edge.toNodeId;
     e["label"] = edge.label;
+    if (!edge.id.empty()) e["id"] = edge.id;  // G2 P7: edge ids cross the wire
     edges.push_back(e);
   }
   signalGraphJson["nodes"] = nodes;
@@ -229,6 +233,8 @@ bool doc_from_json(const json& j, SfProjectDoc& out, std::string& err) {
       if (n.contains("mixer") && n["mixer"].is_object()) {
         node.mixer.mute = n["mixer"].value("mute", false);
         node.mixer.solo = n["mixer"].value("solo", false);
+        node.mixer.gainDb = n["mixer"].value("gainDb", 0.0);
+        node.mixer.pan = n["mixer"].value("pan", 0.0);
       }
       out.signalGraph.nodes.push_back(node);
     }
@@ -236,6 +242,7 @@ bool doc_from_json(const json& j, SfProjectDoc& out, std::string& err) {
   if (sg.contains("edges") && sg["edges"].is_array()) {
     for (const auto& e : sg["edges"]) {
       SignalEdge edge;
+      edge.id = e.value("id", "");
       edge.fromNodeId = e.value("from", "");
       edge.toNodeId = e.value("to", "");
       edge.label = e.value("label", "");
