@@ -16,6 +16,10 @@
 #include "soundforge/sf_types.h"
 #include "soundforge/sf_version.h"
 
+// Typed graph model (§3.2) — must precede sfcore aliases below so the header
+// stays self-contained (it uses concrete std/types only).
+#include "graph_internal.hpp"
+
 namespace sfcore {
 
 using json = nlohmann::json;
@@ -141,7 +145,7 @@ struct SfProjectDoc {
   SceneStub scene;
   std::vector<ObjectEnvelope> audienceReceivers;
   std::vector<ObjectEnvelope> equipment;
-  json signalGraph = empty_graph();
+  SignalGraphDoc signalGraph;
   json powerGraph = empty_graph();
   std::vector<ObjectEnvelope> audioAssets;
   std::vector<ObjectEnvelope> dspPresets;

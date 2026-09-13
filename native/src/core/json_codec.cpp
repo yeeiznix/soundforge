@@ -113,7 +113,28 @@ json doc_to_json(const SfProjectDoc& d) {
 
   j["audienceReceivers"] = envelopes(d.audienceReceivers);
   j["equipment"] = envelopes(d.equipment);
-  j["signalGraph"] = d.signalGraph;
+  json signalGraphJson = json::object();
+  json nodes = json::array();
+  for (const auto& node : d.signalGraph.nodes) {
+    json n = json::object();
+    n["kind"] = node_kind_name(static_cast<SignalNodeKind>(node.kind));
+    n["id"] = node.id;
+    n["label"] = node.name;
+    n["position"] = {{"x", node.position.x}, {"y", node.position.y}};
+    n["mixer"] = {{"mute", node.mixer.mute}, {"solo", node.mixer.solo}};
+    nodes.push_back(n);
+  }
+  json edges = json::array();
+  for (const auto& edge : d.signalGraph.edges) {
+    json e = json::object();
+    e["from"] = edge.fromNodeId;
+    e["to"] = edge.toNodeId;
+    e["label"] = edge.label;
+    edges.push_back(e);
+  }
+  signalGraphJson["nodes"] = nodes;
+  signalGraphJson["edges"] = edges;
+  j["signalGraph"] = signalGraphJson;
   j["powerGraph"] = d.powerGraph;
   j["audioAssets"] = envelopes(d.audioAssets);
   j["dspPresets"] = envelopes(d.dspPresets);
@@ -193,7 +214,35 @@ bool doc_from_json(const json& j, SfProjectDoc& out, std::string& err) {
     }
   }
 
-  if (j.contains("signalGraph") && j["signalGraph"].is_object()) out.signalGraph = j["signalGraph"];
+  if (j.contains("signalGraph") && j["signalGraph"].is_object()) {
+  const json& sg = j["signalGraph"];
+  if (sg.contains("nodes") && sg["nodes"].is_array()) {
+    for (const auto& n : sg["nodes"]) {
+      SignalNode node;
+      node.id = n.value("id", "");
+      node.kind = static_cast<int>(parse_node_kind(n.value("kind", "source")));
+      node.name = n.value("label", "");
+      if (n.contains("position") && n["position"].is_object()) {
+        node.position.x = n["position"].value("x", 0.0);
+        node.position.y = n["position"].value("y", 0.0);
+      }
+      if (n.contains("mixer") && n["mixer"].is_object()) {
+        node.mixer.mute = n["mixer"].value("mute", false);
+        node.mixer.solo = n["mixer"].value("solo", false);
+      }
+      out.signalGraph.nodes.push_back(node);
+    }
+  }
+  if (sg.contains("edges") && sg["edges"].is_array()) {
+    for (const auto& e : sg["edges"]) {
+      SignalEdge edge;
+      edge.fromNodeId = e.value("from", "");
+      edge.toNodeId = e.value("to", "");
+      edge.label = e.value("label", "");
+      out.signalGraph.edges.push_back(edge);
+    }
+  }
+}
   if (j.contains("powerGraph") && j["powerGraph"].is_object()) out.powerGraph = j["powerGraph"];
 
   auto read_collection = [&](const char* key, std::vector<ObjectEnvelope>& dst) -> bool {
