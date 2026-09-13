@@ -1,6 +1,7 @@
 # G0 ignores — docs/PLAN_G0.md Phase 7 (parallelizable list)
 build/
 native/build/
+native/build-*/
 app/build/
 .gradle/
 local.properties

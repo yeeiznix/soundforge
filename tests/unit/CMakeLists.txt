@@ -16,6 +16,7 @@ add_executable(sf_unit_tests
     test_graph_edges.cpp
     test_graph_validate.cpp
     test_graph_mixer.cpp
+    test_cmd_queue.cpp
 )
 
 target_include_directories(sf_unit_tests PRIVATE

@@ -10,6 +10,7 @@ set(SFCORE_SOURCES
     json_codec.cpp
     migration.cpp
     project.cpp
+    command_queue.cpp
     ../graph/graph_abi.cpp
 )
 
