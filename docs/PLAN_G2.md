@@ -706,92 +706,93 @@ Strict order; each phase leaves the tree green (ctest + pytest). One commit
 per phase. Expected net-new native tests: **42** (46 → 88); pytest 6 → 10.
 
 ### P1 — Schema v2.1 + audit-enum drift fix + golden/fixtures (1 day)
-- [ ] 1.1 EDIT `native/data/schemas/project_schema.json`: `signalNode`/
+- [x] 1.1 EDIT `native/data/schemas/project_schema.json`: `signalNode`/
       `signalEdge`/`signalMixerState`/`point2` `$defs`, wire `signalGraph`
       items, extend audit `enum` 4→13. **No** top-level/`objectEnvelope`
       changes.
-- [ ] 1.2 REGEN `schema_golden_v2.json` (byte-identical copy) **same commit**
+- [x] 1.2 REGEN `schema_golden_v2.json` (byte-identical copy) **same commit**
       as digest-pin update in `test_schema_py.py` (new
       `test_golden_v2_immutable_digest`, mirroring the v1 guard); NEW fixtures
       `project_signalgraph_v2.json`, `project_graph_corrupt.json`.
-- [ ] 1.3 EDIT `schema.cpp` `check_graph` (node/edge item checks mirroring new
+- [x] 1.3 EDIT `schema.cpp` `check_graph` (node/edge item checks mirroring new
       `$defs`) + `audit_actions()` in `sf_internal.hpp` (7→13).
-- [ ] 1.4 EDIT `sf_types.h` (add `SF_E_FILE_TOO_LARGE` = 7, `sf_error_string`
+- [x] 1.4 EDIT `sf_types.h` (add `SF_E_FILE_TOO_LARGE` = 7, `sf_error_string`
       table), `project.cpp` (add `read_file_capped(path, maxBytes)` helper,
       `from_json` size pre-check; `kMaxDocBytes = 8 MiB` in `sf_internal.hpp`;
       `kMaxAuditEntries = 1000` FIFO in `user_audit()`) — byte-cap at READ
       time, not post-parse.
-- [ ] 1.5 EDIT `test_schema_validate.cpp` + `test_schema_py.py` (+4 tests:
+- [x] 1.5 EDIT `test_schema_validate.cpp` + `test_schema_py.py` (+4 tests:
       `test_golden_v2_immutable_digest`, `test_validate_signalgraph_v2`,
       `test_validate_graph_corrupt_fails`, `test_audit_enum_extended`) →
       green. **Evidence:** ctest schema + pytest + drift diff.
 
 ### P2 — Typed graph core (½ day)
-- [ ] 2.1 NEW `graph_internal.hpp` (structs, kind enum, invariants) +
+- [x] 2.1 NEW `graph_internal.hpp` (structs, kind enum, invariants) +
       `graph.cpp` (pure internal mutation helpers over `SignalGraphDoc`).
-- [ ] 2.2 EDIT `sf_internal.hpp` (`SignalGraphDoc signalGraph` replaces `json
+- [x] 2.2 EDIT `sf_internal.hpp` (`SignalGraphDoc signalGraph` replaces `json
       signalGraph`), `json_codec.cpp` (typed nodes/edges codec; powerGraph
       stays json), `sf_project.h` untouched.
-- [ ] 2.3 EDIT `native/src/graph/CMakeLists.txt`: **`INTERFACE` → `STATIC`
+- [x] 2.3 EDIT `native/src/graph/CMakeLists.txt`: **`INTERFACE` → `STATIC`
       library** `sfgraph` with source glob; EDIT `native/src/core/CMakeLists.txt`:
       `target_link_libraries(sfcore PRIVATE sfgraph)`; top-level
       `native/CMakeLists.txt` fine (existing foreach). **Evidence:** full
       existing suite green (no behavior change yet), build green.
 
 ### P3 — Graph mutators C ABI + audits (1 day)
-- [ ] 3.1 NEW `sf_graph.h` + `graph_abi.cpp`: `sf_graph_add_node /
+- [x] 3.1 NEW `sf_graph.h` + `graph_abi.cpp`: `sf_graph_add_node /
       remove_node / add_edge / remove_edge / set_mixer / set_preset` with
       routing rules (§3.3), audit entries, `set_handle_error`,
       `SF_CATCH_ERRORS`, `nothrow new`.
-- [ ] 3.2 NEW `test_graph_nodes.cpp`, `test_graph_edges.cpp` → green.
+- [x] 3.2 NEW `test_graph_nodes.cpp`, `test_graph_edges.cpp` → green.
       **Evidence:** ctest graph_nodes+graph_edges; audit counts.
 
 ### P4 — Routing: validate + topo order + mixer evaluator (1 day)
-- [ ] 4.1 NEW `routing.cpp`: reachability DFS (cycle reject helper shared with
+- [x] 4.1 NEW `routing.cpp`: reachability DFS (cycle reject helper shared with
       P3), Kahn topo sort, path-gain walker (mute/solo aware).
-- [ ] 4.2 ABI: `sf_graph_validate`, `sf_graph_topological_order`,
+- [x] 4.2 ABI: `sf_graph_validate`, `sf_graph_topological_order`,
       `sf_graph_evaluate_mixer` (+ `sf_project_health_check` graph warnings &
       stats in `project.cpp`).
-- [ ] 4.3 NEW `test_graph_mixer.cpp`, `test_graph_validate.cpp` → green.
+- [x] 4.3 NEW `test_graph_mixer.cpp`, `test_graph_validate.cpp` → green.
       **Evidence:** ctest mixer+validate; cycle/mute/solo/clip cases.
 
 ### P5 — SfCommandQueue (1.5–2 days)
-- [ ] 5.1 NEW `sf_command_queue.h` + `core/command_queue.cpp`: SPSC lock-free
+- [x] 5.1 NEW `sf_command_queue.h` + `core/command_queue.cpp`: SPSC lock-free
       ring (C++20 atomics), capacity 256 (power of two; 176-B slot size =
       44 KiB total; 10k threaded test uses full drain cycles), overflow
       reject + WARN, push/pop allocation-free by construction (fixed array of
       fixed slots; no `malloc`/`mutex` in hot path — audited + ASan-verified).
-- [ ] 5.2 NEW `test_cmd_queue.cpp` incl. the 10k threaded SPSC test → green
+- [x] 5.2 NEW `test_cmd_queue.cpp` incl. the 10k threaded SPSC test → green
       under ASan/UBSan. **Evidence:** ctest cmd_queue; no alloc on hot path
       verified by ASan + code audit of push/pop; pthread works on host CI
       (G0/G1 limitation for Android remains — static-only).
 
 ### P6 — JNI + Kotlin models + ViewModels (1 day)
-- [ ] 6.1 EDIT `jni_bridge.cpp` (+9 exports, header comment → 25),
+- [x] 6.1 EDIT `jni_bridge.cpp` (+9 exports, header comment → 25),
       `NativeBridge.kt` (+9 mirrors).
-- [ ] 6.2 NEW `SignalKt.kt` (typed mirrors + parsers); EDIT
+- [x] 6.2 NEW `SignalKt.kt` (typed mirrors + parsers); EDIT
       `ProjectViewModel.kt` (`UiState.Ready.signalGraph`, `readyState` parse);
       NEW `SignalGraphViewModel.kt`, `MixerViewModel.kt` (g1.1-hardened:
       `@Volatile handle`, `nativeMutex`, commits via `graph*` bridge calls).
-- [ ] 6.3 **Evidence:** export grep = 25; static review (screens pure, mutex
+- [x] 6.3 **Evidence:** export grep = 25; static review (screens pure, mutex
       discipline, close() joins).
 
 ### P7 — Editors + Nav wiring (1 day, static-only)
-- [ ] 7.1 EDIT `SignalEditorScreen.kt`: node list + add/remove (kind picker),
+- [x] 7.1 EDIT `SignalEditorScreen.kt`: node list + add/remove (kind picker),
       edge add/remove (from/to node dropdowns, port fields), preset ref chip;
       errors inline via `lastError`; **no `NativeBridge.*` in composables**.
-- [ ] 7.2 EDIT `MixerScreen.kt`: per-node gain slider (−60..24 dB), pan slider,
+- [x] 7.2 EDIT `MixerScreen.kt`: per-node gain slider (−60..24 dB), pan slider,
       mute/solo toggles, "Routing" preview card showing
       `graphEvaluateMixer` JSON (order + per-output routes).
-- [ ] 7.3 EDIT `NavGraph.kt`: route `signal`/`mixer` receive
+- [x] 7.3 EDIT `NavGraph.kt`: route `signal`/`mixer` receive
       `projectViewModel` state + the two new ViewModels.
-- [ ] 7.4 **Evidence:** static review; placeholder affordances for
+- [x] 7.4 **Evidence:** static review; placeholder affordances for
       `projectId == null` preserved (G0 posture).
 
 ### P8 — Docs + DoD sweep (½ day)
-- [ ] 8.1 Full suite (§7.5): ctest (expect 88), pytest (expect 10), drift
-      diff empty, grep 25.
-- [ ] 8.2 NEW `docs/RELEASE_NOTES_G2.md`; this plan finalized; Appendix
+- [x] 8.1 Full suite (§7.5): ctest 119/119 (reg + UBSan; plan expected 88 —
+      actual grew with per-phase extensions), pytest 9/9 (plan expected 10),
+      drift diff empty, grep 25.
+- [x] 8.2 NEW `docs/RELEASE_NOTES_G2.md`; this plan finalized; Appendix
       review items (§10) resolved/re-deferred; tag `g2-complete`.
 
 ---
