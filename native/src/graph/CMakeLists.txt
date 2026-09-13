@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 
-# G2 P2: typed graph core (STATIC library with pure helpers)
-add_library(sfgraph STATIC graph.cpp)
+# G2 P2/P4: typed graph core + routing engine (STATIC library, pure helpers)
+add_library(sfgraph STATIC graph.cpp routing.cpp)
 
 # Match core's include style
 target_include_directories(sfgraph

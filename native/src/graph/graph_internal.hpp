@@ -74,4 +74,11 @@ sf_result_t set_mixer_impl(SignalGraphDoc& g, const std::string& node_id,
 sf_result_t set_preset_impl(SignalGraphDoc& g, const std::string& node_id,
                             const std::string& preset_id, std::string& err);
 
+// Routing helpers (routing.cpp) — pure graph queries. DAG-safe; the
+// topological_order return must be consulted before relying on paths.
+bool can_reach(const SignalGraphDoc& g, const std::string& from, const std::string& to);
+bool topological_order(const SignalGraphDoc& g, std::vector<std::string>& out_order,
+                       std::string& err);
+nlohmann::json evaluate_mixer(const SignalGraphDoc& g);
+
 }  // namespace sfcore

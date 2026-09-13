@@ -1,7 +1,6 @@
 #include "graph_internal.hpp"
 #include <cstring>
 #include <cmath>
-#include <set>
 
 namespace sfcore {
 
@@ -99,19 +98,6 @@ sf_result_t remove_node_impl(SignalGraphDoc& g, const std::string& node_id,
   return SF_OK;
 }
 
-// Helper: DFS to check if to_id is reachable from from_id (cycle detection)
-static bool is_reachable(const SignalGraphDoc& g, const std::string& from_id, const std::string& to_id,
-                         std::set<std::string>& visited) {
-  if (from_id == to_id) return true;
-  visited.insert(from_id);
-  for (const auto& edge : g.edges) {
-    if (edge.fromNodeId == from_id && !visited.count(edge.toNodeId)) {
-      if (is_reachable(g, edge.toNodeId, to_id, visited)) return true;
-    }
-  }
-  return false;
-}
-
 sf_result_t add_edge_impl(SignalGraphDoc& g, const std::string& id,
                           const std::string& from_id, const std::string& to_id,
                           int32_t from_port, int32_t to_port, std::string& err) {
@@ -149,9 +135,8 @@ sf_result_t add_edge_impl(SignalGraphDoc& g, const std::string& id,
     err = "graph.addEdge: cannot route out of an output node";
     return SF_E_INVALID_ARG;
   }
-  // Cycle detection
-  std::set<std::string> visited;
-  if (is_reachable(g, to_id, from_id, visited)) {
+  // Cycle detection (shared DFS helper, routing.cpp)
+  if (can_reach(g, to_id, from_id)) {
     err = "graph.addEdge: would create cycle";
     return SF_E_INVALID_ARG;
   }

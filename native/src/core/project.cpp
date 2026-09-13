@@ -411,6 +411,41 @@ extern "C" sf_result_t sf_project_health_check(const sf_project_t* p, char* repo
       }
     }
 
+    // G2: signal graph health (§3.3) — dangling edges and cycles are errors;
+    // nodes unreachable from any source are warnings (repairable in editor).
+    {
+      const auto& g = doc.signalGraph;
+      std::set<std::string> node_ids;
+      for (const auto& n : g.nodes) node_ids.insert(n.id);
+      for (const auto& e : g.edges) {
+        if (!node_ids.count(e.fromNodeId)) {
+          errors.push_back("dangling graph edge from " + e.fromNodeId);
+        }
+        if (!node_ids.count(e.toNodeId)) {
+          errors.push_back("dangling graph edge to " + e.toNodeId);
+        }
+      }
+      std::vector<std::string> order;
+      std::string topo_err;
+      if (!sfcore::topological_order(g, order, topo_err)) {
+        errors.push_back("signal graph cycle: " + topo_err);
+      }
+      for (const auto& n : g.nodes) {
+        if (n.kind == sfcore::SfNodeSource) continue;
+        bool reachable = false;
+        for (const auto& s : g.nodes) {
+          if (s.kind == sfcore::SfNodeSource && s.id != n.id &&
+              sfcore::can_reach(g, s.id, n.id)) {
+            reachable = true;
+            break;
+          }
+        }
+        if (!reachable) {
+          warnings.push_back("signal graph node not reachable from any source: " + n.id);
+        }
+      }
+    }
+
     // Stats
     sfcore::json stats = sfcore::json::object();
     stats["audienceReceivers"] = doc.audienceReceivers.size();
@@ -424,6 +459,8 @@ extern "C" sf_result_t sf_project_health_check(const sf_project_t* p, char* repo
     stats["inventoryRefs"] = doc.inventoryRefs.size();
     stats["reports"] = doc.reports.size();
     stats["auditLog"] = doc.auditLog.size();
+    stats["signalGraphNodes"] = doc.signalGraph.nodes.size();
+    stats["signalGraphEdges"] = doc.signalGraph.edges.size();
 
     report["status"] = errors.empty() ? (warnings.empty() ? "ok" : "warning") : "error";
     report["warnings"] = warnings;
