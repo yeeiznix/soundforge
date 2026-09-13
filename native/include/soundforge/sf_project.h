@@ -48,13 +48,21 @@ const char* sf_project_get_engine_version(const sf_project_t* p);
  * Additive ABI (PLAN_G1 §4.2). Every mutator appends an audit entry
  * (actor "user", action project.rename|venue.update|scene.update) and bumps
  * project.modifiedAt. Errors: SF_* code + message via sf_last_error(handle).
- * Names are non-empty, at most 200 chars. */
+ * Names are non-empty, at most 200 code points (UTF-8, byte ceiling 800). */
 sf_result_t sf_project_rename(sf_project_t* p, const char* new_name);
 sf_result_t sf_venue_rename(sf_project_t* p, const char* new_name);
 sf_result_t sf_venue_set_dimensions(sf_project_t* p, double width_m, double depth_m,
                                     double height_m);
 sf_result_t sf_scene_set_geometry(sf_project_t* p, double cx, double cy, double cz,
                                   double lx, double ly, double lz);
+
+/* G3 (PLAN_G3 §4.5, additive ABI): rename the frozen scene singleton.
+ * Validates non-empty (rejects whitespace-only), <= 200 Unicode code points and
+ * <= 800 UTF-8 bytes; writes only doc.scene.name (freeze invariant — no other
+ * mutator touches it). Audit action "scene.update" (reuse, no schema enum
+ * change) with objectId = scene.id; bumps modifiedAt; logs
+ * INFO project "scene.update: rename". */
+sf_result_t sf_scene_rename(sf_project_t* p, const char* new_name);
 
 /* --- Health ---
  * Writes a JSON report:

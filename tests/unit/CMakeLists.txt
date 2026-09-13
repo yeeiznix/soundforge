@@ -11,6 +11,7 @@ add_executable(sf_unit_tests
     test_migration.cpp
     test_geometry.cpp
     test_scene_venue.cpp
+    test_name_model.cpp
     test_diagnostics.cpp
     test_graph_nodes.cpp
     test_graph_edges.cpp

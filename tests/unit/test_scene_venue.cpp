@@ -45,10 +45,25 @@ TEST(SceneVenue, RenameRejects) {
     EXPECT_EQ(sf_project_rename(nullptr, "X"), SF_E_INVALID_ARG);
     EXPECT_EQ(sf_project_rename(p, ""), SF_E_INVALID_ARG);
     EXPECT_NE(std::string(sf_last_error(p)).find("non-empty"), std::string::npos);
+    // G3 P1: cap is 200 code points (byte ceiling 800), not 200 bytes.
     std::string long_name(201, 'a');
     EXPECT_EQ(sf_project_rename(p, long_name.c_str()), SF_E_INVALID_ARG);
     EXPECT_NE(std::string(sf_last_error(p)).find("too long"), std::string::npos);
     EXPECT_STREQ(sf_project_get_name(p), "R");  // unchanged on failure
+    sf_project_destroy(p);
+}
+
+TEST(SceneVenue, RenameMultibyteCodePointCap) {
+    // 200 2-byte code points = 400 bytes: rejected under the G1 byte cap,
+    // accepted under the G3 code-point cap (relaxation only).
+    sf_project_t* p = sf_project_create("R", nullptr);
+    ASSERT_NE(p, nullptr);
+    std::string cp200;
+    for (int i = 0; i < 200; ++i) cp200 += "\xC3\xA9";  // é
+    ASSERT_EQ(cp200.size(), 400u);
+    EXPECT_EQ(sf_project_rename(p, cp200.c_str()), SF_OK);
+    EXPECT_EQ(sf_project_rename(p, (cp200 + "\xC3\xA9").c_str()), SF_E_INVALID_ARG);
+    EXPECT_NE(std::string(sf_last_error(p)).find("too long"), std::string::npos);
     sf_project_destroy(p);
 }
 
@@ -209,6 +224,18 @@ TEST(SceneVenue, VenueRenameLongNameRejected) {
     EXPECT_NE(std::string(sf_last_error(p)).find("too long"), std::string::npos);
     // Venue name unchanged on failure.
     EXPECT_NE(json_of(p).find("Untitled Venue"), std::string::npos);
+    sf_project_destroy(p);
+}
+
+TEST(SceneVenue, VenueRenameMultibyteCodePointCap) {
+    // 200 3-byte code points = 600 bytes: accepted under the G3 code-point cap.
+    sf_project_t* p = sf_project_create("L", nullptr);
+    ASSERT_NE(p, nullptr);
+    std::string cp200;
+    for (int i = 0; i < 200; ++i) cp200 += "\xE2\x82\xAC";  // €
+    ASSERT_EQ(cp200.size(), 600u);
+    EXPECT_EQ(sf_venue_rename(p, cp200.c_str()), SF_OK);
+    EXPECT_EQ(sf_venue_rename(p, (cp200 + "\xE2\x82\xAC").c_str()), SF_E_INVALID_ARG);
     sf_project_destroy(p);
 }
 

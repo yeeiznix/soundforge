@@ -175,7 +175,12 @@ extern "C" sf_result_t sf_project_to_json(const sf_project_t* p, char** out_json
   }
   try {
     const auto* proj = reinterpret_cast<const sfcore::SfProject*>(p);
-    const std::string s = sfcore::doc_to_json(proj->doc).dump(2);
+    // error_handler_t::replace (G3 ORC-P1-1/2): accepted names may contain
+    // malformed UTF-8 (utf8_char_count is fail-open); emit U+FFFD instead of
+    // throwing, so serialization can never brick the document.
+    const std::string s =
+        sfcore::doc_to_json(proj->doc)
+            .dump(2, ' ', false, sfcore::json::error_handler_t::replace);
     char* buf = static_cast<char*>(std::malloc(s.size() + 1));
     if (!buf) {
       sfcore::set_last_error("to_json: out of memory");
@@ -185,7 +190,15 @@ extern "C" sf_result_t sf_project_to_json(const sf_project_t* p, char** out_json
     *out_json = buf;
     *out_len = s.size();
     return SF_OK;
-  } SF_CATCH_ERRORS()
+  } catch (const std::exception& e) {
+    auto* proj = const_cast<sfcore::SfProject*>(reinterpret_cast<const sfcore::SfProject*>(p));
+    sfcore::set_handle_error(proj, e.what());  // ORC-P1-4: handle error too
+    return SF_E_SCHEMA;
+  } catch (...) {
+    auto* proj = const_cast<sfcore::SfProject*>(reinterpret_cast<const sfcore::SfProject*>(p));
+    sfcore::set_handle_error(proj, "unknown native exception");
+    return SF_E_SCHEMA;
+  }
 }
 
 extern "C" sf_result_t sf_project_from_json(const char* json, size_t len, sf_project_t** out) {
@@ -251,13 +264,25 @@ extern "C" sf_result_t sf_project_save_to_path(const sf_project_t* p, const char
         "engine " + proj->doc.engineVersion,
     });
     proj->doc.project.modifiedAt = now;
-    const std::string s = sfcore::doc_to_json(proj->doc).dump(2);
+    // error_handler_t::replace (G3 ORC-P1-1/2): never throw on malformed UTF-8
+    // in an accepted name; emit U+FFFD so save can never brick the document.
+    const std::string s =
+        sfcore::doc_to_json(proj->doc)
+            .dump(2, ' ', false, sfcore::json::error_handler_t::replace);
     const sf_result_t rc = sfcore::write_file_atomic(path, s);
     if (rc == SF_OK) {
       sfcore::log_line(SF_LOG_INFO, "project", ("save: " + std::string(path)).c_str());
     }
     return rc;
-  } SF_CATCH_ERRORS()
+  } catch (const std::exception& e) {
+    auto* proj = const_cast<sfcore::SfProject*>(reinterpret_cast<const sfcore::SfProject*>(p));
+    sfcore::set_handle_error(proj, e.what());  // ORC-P1-4: handle error too
+    return SF_E_SCHEMA;
+  } catch (...) {
+    auto* proj = const_cast<sfcore::SfProject*>(reinterpret_cast<const sfcore::SfProject*>(p));
+    sfcore::set_handle_error(proj, "unknown native exception");
+    return SF_E_SCHEMA;
+  }
 }
 
 extern "C" sf_result_t sf_project_open_from_path(const char* path, sf_project_t** out) {
@@ -496,7 +521,7 @@ extern "C" sf_result_t sf_project_rename(sf_project_t* p, const char* new_name) 
       sfcore::set_handle_error(proj, "rename: name must be non-empty");
       return SF_E_INVALID_ARG;
     }
-    if (std::strlen(new_name) > 200) {
+    if (std::strlen(new_name) > 800 || sfcore::utf8_char_count(new_name) > 200) {
       sfcore::set_handle_error(proj, "rename: name too long (>200 chars)");
       return SF_E_INVALID_ARG;
     }
@@ -519,7 +544,7 @@ extern "C" sf_result_t sf_venue_rename(sf_project_t* p, const char* new_name) {
       sfcore::set_handle_error(proj, "venue.update: name must be non-empty");
       return SF_E_INVALID_ARG;
     }
-    if (std::strlen(new_name) > 200) {
+    if (std::strlen(new_name) > 800 || sfcore::utf8_char_count(new_name) > 200) {
       sfcore::set_handle_error(proj, "venue.update: name too long (>200 chars)");
       return SF_E_INVALID_ARG;
     }
@@ -605,6 +630,42 @@ extern "C" sf_result_t sf_scene_set_geometry(sf_project_t* p, double cx, double 
                    std::to_string(cz) + " listening=" + std::to_string(lx) + "," +
                    std::to_string(ly) + "," + std::to_string(lz));
     sfcore::log_line(SF_LOG_INFO, "project", "scene.update: geometry");
+    return SF_OK;
+  } SF_CATCH_ERRORS()
+}
+
+extern "C" sf_result_t sf_scene_rename(sf_project_t* p, const char* new_name) {
+  if (!p) {
+    sfcore::set_handle_error(nullptr, "scene.update: null handle");
+    return SF_E_INVALID_ARG;
+  }
+  try {
+    auto* proj = reinterpret_cast<sfcore::SfProject*>(p);
+    if (!new_name || !*new_name) {
+      sfcore::set_handle_error(proj, "scene.update: name must be non-empty");
+      return SF_E_INVALID_ARG;
+    }
+    // Reject whitespace-only names (non-empty but semantically blank).
+    bool blank = true;
+    for (const unsigned char* q = reinterpret_cast<const unsigned char*>(new_name); *q; ++q) {
+      if (!std::isspace(*q)) {
+        blank = false;
+        break;
+      }
+    }
+    if (blank) {
+      sfcore::set_handle_error(proj, "scene.update: name must be non-empty");
+      return SF_E_INVALID_ARG;
+    }
+    // <= 200 Unicode code points AND <= 800 UTF-8 bytes (D5).
+    if (std::strlen(new_name) > 800 || sfcore::utf8_char_count(new_name) > 200) {
+      sfcore::set_handle_error(proj, "scene.update: name too long (>200 chars)");
+      return SF_E_INVALID_ARG;
+    }
+    proj->doc.scene.name = new_name;  // ONLY field touched (freeze invariant)
+    user_audit(proj, "scene.update", proj->doc.scene.id,
+               "rename name=" + std::string(new_name));
+    sfcore::log_line(SF_LOG_INFO, "project", "scene.update: rename");
     return SF_OK;
   } SF_CATCH_ERRORS()
 }

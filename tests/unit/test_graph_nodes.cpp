@@ -67,6 +67,27 @@ TEST(GraphNodes, AddNodeRejectsBadName) {
     EXPECT_EQ(sf_graph_add_node(p, SF_NODE_SOURCE, nullptr, id), SF_E_INVALID_ARG);
     std::string long_name(65, 'a');
     EXPECT_EQ(sf_graph_add_node(p, SF_NODE_SOURCE, long_name.c_str(), id), SF_E_INVALID_ARG);
+    EXPECT_NE(std::string(sf_last_error(p)).find(">64 chars"), std::string::npos);
+    sf_project_destroy(p);
+}
+
+TEST(GraphNodes, AddNodeLabelMultibyteCodePointCap) {
+    // G3 P1: label cap is 64 code points (byte ceiling 256), not 64 bytes.
+    // A 32-code-point multibyte label (96 bytes > 64) is now accepted.
+    sf_project_t* p = sf_project_create("G", nullptr);
+    ASSERT_NE(p, nullptr);
+    char id[37];
+    std::string label32;
+    for (int i = 0; i < 32; ++i) label32 += "\xE2\x82\xAC";  // € (3 bytes each)
+    ASSERT_GT(label32.size(), 64u);
+    EXPECT_EQ(sf_graph_add_node(p, SF_NODE_SOURCE, label32.c_str(), id), SF_OK);
+
+    // 65 code points (195 bytes) rejected with the updated message.
+    std::string label65;
+    for (int i = 0; i < 65; ++i) label65 += "\xE2\x82\xAC";
+    EXPECT_EQ(sf_graph_add_node(p, SF_NODE_SOURCE, label65.c_str(), id),
+              SF_E_INVALID_ARG);
+    EXPECT_NE(std::string(sf_last_error(p)).find(">64 chars"), std::string::npos);
     sf_project_destroy(p);
 }
 

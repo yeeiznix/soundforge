@@ -1,4 +1,8 @@
 #include "graph_internal.hpp"
+// Shared UTF-8 code-point counter (G3 D5): lives in the core internal header,
+// which sfgraph does not otherwise include. Relative include keeps the G3 P1
+// file list (no graph/CMakeLists.txt edit) while sharing one implementation.
+#include "../core/sf_internal.hpp"
 #include <cstring>
 #include <cmath>
 
@@ -46,9 +50,9 @@ sf_result_t add_node_impl(SignalGraphDoc& g, int32_t kind, const char* name,
     err = "graph.addNode: name must be non-empty";
     return SF_E_INVALID_ARG;
   }
-  const size_t name_len = std::strlen(name);
-  if (name_len > 64) {
-    err = "graph.addNode: name too long (>64 bytes)";
+  const size_t name_bytes = std::strlen(name);
+  if (name_bytes > 256 || utf8_char_count(name) > 64) {
+    err = "graph.addNode: name too long (>64 chars)";
     return SF_E_INVALID_ARG;
   }
   // Validate id format

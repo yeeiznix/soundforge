@@ -165,14 +165,27 @@ struct SfProject {
 };
 
 // Shared audit helper — used by project.cpp mutators and graph_abi.cpp.
-// Detail is truncated to 512 chars; auditLog is FIFO-capped at kMaxAuditEntries.
+// Detail is truncated to 512 bytes; auditLog is FIFO-capped at kMaxAuditEntries.
+// Truncation walks back over UTF-8 continuation bytes (up to 3) so it never
+// splits a multi-byte sequence (G3 ORC-P1-1): a split tail would make
+// json.dump() throw under the strict handler. Even so, doc serialization uses
+// error_handler_t::replace, so any malformed byte still serializes (as U+FFFD)
+// instead of bricking the document.
 IsoTimestamp now_iso8601();  // forward declaration (defined in uuid.cpp)
 
 inline void user_audit(SfProject* proj, const char* action,
                        const Uuid& object_id, const std::string& detail) {
   const std::string now = now_iso8601();
   std::string d = detail;
-  if (d.size() > 512) d.resize(512);
+  if (d.size() > 512) {
+    d.resize(512);
+    // Do not end on a split UTF-8 sequence: walk back over continuation bytes.
+    for (int i = 0; i < 3 && !d.empty() &&
+                    (static_cast<unsigned char>(d.back()) & 0xC0) == 0x80;
+         ++i) {
+      d.pop_back();
+    }
+  }
   proj->doc.auditLog.push_back({now, "user", action, object_id, d});
   proj->doc.project.modifiedAt = now;
   while (proj->doc.auditLog.size() > kMaxAuditEntries) {
@@ -248,6 +261,81 @@ inline bool looks_like_semver(const std::string& s) {
   }
   return true;  // anything may follow the third component (suffix)
 }
+
+// ---------------------------------------------------------------------------
+// UTF-8 name cap helper (G3 D5, PLAN_G3 §4.5)
+// ---------------------------------------------------------------------------
+// Count RFC 3629 code points in a NUL-terminated byte string. FAIL-OPEN:
+// invalid UTF-8 never causes a rejection here — every malformed byte counts
+// as one character (conservative: chars >= true code points, so a hostile/
+// broken name can only be *over*-counted; the separate byte ceiling bounds
+// the wire). Handles overlong encodings, lone continuation bytes, truncated
+// sequences, surrogate halves, >U+10FFFF, and 1..4-byte sequences.
+// Never reads past the terminating NUL.
+// Serialization guarantee: accepted names may still contain malformed bytes;
+// doc serialization uses error_handler_t::replace, so such bytes are emitted
+// as U+FFFD replacement chars and never brick the document (G3 ORC-P1-2).
+inline size_t utf8_char_count(const char* s) {
+  if (!s) return 0;
+  size_t count = 0;
+  const unsigned char* p = reinterpret_cast<const unsigned char*>(s);
+  while (*p) {
+    const unsigned char c = *p;
+    size_t seq;
+    if (c < 0x80) {
+      seq = 1;
+    } else if ((c & 0xE0) == 0xC0) {
+      seq = 2;
+    } else if ((c & 0xF0) == 0xE0) {
+      seq = 3;
+    } else if ((c & 0xF8) == 0xF0) {
+      seq = 4;
+    } else {
+      ++p; ++count;  // invalid lead (incl. lone continuation) -> 1 char
+      continue;
+    }
+    if (seq == 1) {
+      ++p; ++count;
+      continue;
+    }
+    bool ok = true;
+    for (size_t i = 1; i < seq; ++i) {
+      if ((p[i] & 0xC0) != 0x80) {  // NUL terminates -> may stop here safely
+        ok = false;
+        break;
+      }
+    }
+    if (ok) {
+      unsigned int cp;
+      if (seq == 2) {
+        cp = ((c & 0x1Fu) << 6) | (p[1] & 0x3Fu);
+        if (cp < 0x80) ok = false;  // overlong
+      } else if (seq == 3) {
+        cp = ((c & 0x0Fu) << 12) | ((p[1] & 0x3Fu) << 6) | (p[2] & 0x3Fu);
+        if (cp < 0x800) ok = false;                         // overlong
+        else if (cp >= 0xD800 && cp <= 0xDFFF) ok = false;  // surrogate half
+      } else {
+        cp = ((c & 0x07u) << 18) | ((p[1] & 0x3Fu) << 12) |
+             ((p[2] & 0x3Fu) << 6) | (p[3] & 0x3Fu);
+        if (cp < 0x10000) ok = false;               // overlong
+        else if (cp > 0x10FFFF) ok = false;         // out of range
+        else if (cp >= 0xD800 && cp <= 0xDFFF) ok = false;  // surrogate half
+      }
+    }
+    if (!ok) {
+      ++p; ++count;  // malformed byte -> 1 char; remaining bytes re-examined
+      continue;
+    }
+    p += seq;
+    ++count;
+  }
+  return count;
+}
+
+// G3 P7 placeholder: pre-parse JSON nesting cap (checked_parse() in schema.cpp
+// enforces it). Declared here so P1 keeps the shared internal surface in one
+// place; unused until P7 lands the scanner.
+const int kMaxJsonDepth = 256;
 
 // ---------------------------------------------------------------------------
 // JSON codec (json_codec.cpp)
