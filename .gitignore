@@ -13,3 +13,6 @@ __pycache__/
 .cxx/
 .pytest_cache/
 .mock-cache
+
+# deepwork state (git-local only)
+.slim/deepwork/
