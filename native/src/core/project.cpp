@@ -448,26 +448,6 @@ extern "C" sf_result_t sf_project_health_check(const sf_project_t* p, char* repo
 // ---------------------------------------------------------------------------
 // C ABI: editing mutators (G1, PLAN_G1 §4.2)
 // ---------------------------------------------------------------------------
-namespace {
-
-// Appends an actor-"user" audit entry and bumps project.modifiedAt.
-// Mirrors save's system audit; detail is truncated to 512 chars as documented
-// on AuditEntry. Caller must hold a non-null handle.
-void user_audit(sfcore::SfProject* proj, const char* action,
-                const sfcore::Uuid& object_id, const std::string& detail) {
-  const std::string now = sfcore::now_iso8601();
-  std::string d = detail;
-  if (d.size() > 512) d.resize(512);
-  proj->doc.auditLog.push_back({now, "user", action, object_id, d});
-  // FIFO: drop oldest entries when the in-memory cap is exceeded.
-  while (proj->doc.auditLog.size() > sfcore::kMaxAuditEntries) {
-    proj->doc.auditLog.erase(proj->doc.auditLog.begin());
-  }
-  proj->doc.project.modifiedAt = now;
-}
-
-}  // namespace
-
 extern "C" sf_result_t sf_project_rename(sf_project_t* p, const char* new_name) {
   if (!p) {
     sfcore::set_handle_error(nullptr, "rename: null handle");

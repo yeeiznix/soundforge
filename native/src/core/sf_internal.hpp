@@ -164,11 +164,26 @@ struct SfProject {
   std::string lastError = "no error";
 };
 
+// Shared audit helper — used by project.cpp mutators and graph_abi.cpp.
+// Detail is truncated to 512 chars; auditLog is FIFO-capped at kMaxAuditEntries.
+IsoTimestamp now_iso8601();  // forward declaration (defined in uuid.cpp)
+
+inline void user_audit(SfProject* proj, const char* action,
+                       const Uuid& object_id, const std::string& detail) {
+  const std::string now = now_iso8601();
+  std::string d = detail;
+  if (d.size() > 512) d.resize(512);
+  proj->doc.auditLog.push_back({now, "user", action, object_id, d});
+  proj->doc.project.modifiedAt = now;
+  while (proj->doc.auditLog.size() > kMaxAuditEntries) {
+    proj->doc.auditLog.erase(proj->doc.auditLog.begin());
+  }
+}
+
 // ---------------------------------------------------------------------------
 // UUID / time (uuid.cpp)
 // ---------------------------------------------------------------------------
 Uuid uuid_generate();
-IsoTimestamp now_iso8601();
 void now_iso8601_raw(char* buf, size_t cap);  // no-heap variant for sf_log
 
 // ---------------------------------------------------------------------------

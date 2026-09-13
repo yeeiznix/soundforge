@@ -10,6 +10,7 @@ set(SFCORE_SOURCES
     json_codec.cpp
     migration.cpp
     project.cpp
+    ../graph/graph_abi.cpp
 )
 
 add_library(sfcore STATIC ${SFCORE_SOURCES})
@@ -20,6 +21,10 @@ add_library(sfcore STATIC ${SFCORE_SOURCES})
 # resolves from core sources regardless of link ordering.
 target_include_directories(sfcore PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../graph)
 target_link_libraries(sfcore PRIVATE sfgraph)
+
+# graph_abi.cpp lives in src/graph/ but is compiled into sfcore (it needs
+# sfcore internals). Make sure sf_internal.hpp is findable from that TU.
+target_include_directories(sfcore PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Generate build-stamped version header into THIS directory so include order
 # is deterministic (version_gen.h.in lives next to this CMakeLists.txt).

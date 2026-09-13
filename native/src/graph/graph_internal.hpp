@@ -3,10 +3,13 @@
 // so this header must compile standalone with concrete std types.
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
 #include <nlohmann/json.hpp>
+
+#include "soundforge/sf_types.h"
 
 namespace sfcore {
 
@@ -30,6 +33,7 @@ struct SignalNode {
   std::string name;  // wire "label"
   Point2 position;
   SfMixerState mixer;
+  std::string dspPresetRef;  // "" = none; references dspPresets[].id
 };
 
 struct SignalEdge {
@@ -51,5 +55,23 @@ const SignalNode* find_node(const SignalGraphDoc& g, const std::string& id);
 SignalNode* find_node_mut(SignalGraphDoc& g, const std::string& id);
 SignalNodeKind parse_node_kind(const std::string& s);
 std::string node_kind_name(SignalNodeKind k);
+
+// Pure mutation helpers (implemented in graph.cpp). Return SF_OK or SF_E_*;
+// err is populated on failure with a caller-prefixed message like
+// "graph.addNode: name too long".
+sf_result_t add_node_impl(SignalGraphDoc& g, int32_t kind, const char* name,
+                          const std::string& id, std::string& err);
+sf_result_t remove_node_impl(SignalGraphDoc& g, const std::string& node_id,
+                             std::string& err, int& edges_removed);
+sf_result_t add_edge_impl(SignalGraphDoc& g, const std::string& id,
+                          const std::string& from_id, const std::string& to_id,
+                          int32_t from_port, int32_t to_port, std::string& err);
+sf_result_t remove_edge_impl(SignalGraphDoc& g, const std::string& edge_id,
+                             std::string& err);
+sf_result_t set_mixer_impl(SignalGraphDoc& g, const std::string& node_id,
+                           double gain_db, double pan, bool mute, bool solo,
+                           std::string& err);
+sf_result_t set_preset_impl(SignalGraphDoc& g, const std::string& node_id,
+                            const std::string& preset_id, std::string& err);
 
 }  // namespace sfcore

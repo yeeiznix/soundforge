@@ -5,7 +5,7 @@ add_library(sfgraph STATIC graph.cpp)
 
 # Match core's include style
 target_include_directories(sfgraph
-  PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../..
+  PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../../include
   PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party
   PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
 )

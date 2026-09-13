@@ -12,12 +12,15 @@ add_executable(sf_unit_tests
     test_geometry.cpp
     test_scene_venue.cpp
     test_diagnostics.cpp
+    test_graph_nodes.cpp
+    test_graph_edges.cpp
 )
 
 target_include_directories(sf_unit_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/third_party
     ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/src/graph
 )
 
 target_compile_definitions(sf_unit_tests PRIVATE
