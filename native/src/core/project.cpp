@@ -224,12 +224,16 @@ extern "C" sf_result_t sf_project_from_json(const char* json, size_t len, sf_pro
     return SF_E_INVALID_ARG;
   }
   try {
-    // Pre-check byte-cap before parsing (not post-parse)
-    if (len > sfcore::kMaxDocBytes) {
-      sfcore::set_last_error("JSON input exceeds 8 MiB limit");
-      return SF_E_FILE_TOO_LARGE;
+    // G3 P7 (SEC-G3-7): shared pre-parse gate (8 MiB byte cap + depth scan +
+    // nlohmann) replaces the inline byte-cap check — same code and message,
+    // depth gate added before any parse.
+    std::string perr;
+    sfcore::json j;
+    const sf_result_t rc = sfcore::checked_parse(json, len, &j, &perr);
+    if (rc != SF_OK) {
+      sfcore::set_last_error(perr);
+      return rc;
     }
-    sfcore::json j = sfcore::json::parse(json, json + len);
     // Migration if needed.
     const int sv = sfcore::peek_schema_version(j);
     if (sv >= 0 && sv < SF_SCHEMA_VERSION) {
@@ -320,7 +324,16 @@ extern "C" sf_result_t sf_project_open_from_path(const char* path, sf_project_t*
       sfcore::set_last_error(std::string("open: cannot read '") + path + "'");
       return SF_E_NOT_FOUND;  // file missing vs read error — G0 collapses to NOT_FOUND
     }
-    sfcore::json j = sfcore::json::parse(data);
+    // G3 P7 (SEC-G3-7): pre-parse gate (byte cap is already enforced by
+    // read_file_capped above; depth scan + nlohmann here). from_json and
+    // open_from_path share the same checked_parse.
+    std::string perr;
+    sfcore::json j;
+    const sf_result_t prc = sfcore::checked_parse(data.data(), data.size(), &j, &perr);
+    if (prc != SF_OK) {
+      sfcore::set_last_error(perr);
+      return prc;
+    }
     // Peek schemaVersion (may be string or missing).
     int sv = sfcore::peek_schema_version(j);
     if (sv > SF_SCHEMA_VERSION) {

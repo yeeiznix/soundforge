@@ -238,7 +238,15 @@ extern "C" sf_result_t sf_migrate_json(char* json_inout, size_t* inout_len, size
   }
   try {
     const std::string in(json_inout, *inout_len);
-    sfcore::json j = sfcore::json::parse(in);
+    // G3 P7 (SEC-G3-7 / ORC-4c): migrate was the last ungated raw-JSON entry;
+    // checked_parse = 8 MiB byte cap + depth pre-parse before nlohmann.
+    std::string perr;
+    sfcore::json j;
+    const sf_result_t prc = sfcore::checked_parse(in.data(), in.size(), &j, &perr);
+    if (prc != SF_OK) {
+      sfcore::set_last_error(perr);
+      return prc;
+    }
     std::string err;
     const sf_result_t rc = sfcore::migrate_doc_inplace(j, from_ver, to_ver, err);
     if (rc != SF_OK) {

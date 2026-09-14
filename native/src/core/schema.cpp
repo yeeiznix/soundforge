@@ -476,6 +476,107 @@ bool validate_doc_json(const json& j, std::string& errOut) {
 
 }  // namespace sfcore
 
+// ---------------------------------------------------------------------------
+// G3 P7 — JSON depth pre-parse gate (PLAN_G3 §6 P7; SEC-G3-7/-G3-8)
+// ---------------------------------------------------------------------------
+namespace sfcore {
+
+JsonScanStatus scan_json_depth(const char* data, size_t len, int* max_depth_out) {
+  int depth = 0;
+  int max_depth = 0;
+  bool in_string = false;
+  size_t i = 0;
+  const size_t n = len;
+  auto done = [&](JsonScanStatus st) {
+    if (max_depth_out) *max_depth_out = max_depth;
+    return st;
+  };
+  while (i < n) {
+    const unsigned char c = static_cast<unsigned char>(data[i]);
+    if (in_string) {
+      if (c == '"') {
+        in_string = false;
+        ++i;
+      } else if (c == '\\') {
+        // Escape unit = backslash + ONE escaped char. Consuming exactly one
+        // extra char is what keeps the state machine honest: an unknown
+        // escape (\x) is a 2-char unit and must NOT swallow the following
+        // char, and odd/even backslash runs before a quote fall out of this
+        // rule naturally (\\ = escaped backslash; \" = escaped quote).
+        ++i;  // consume the backslash
+        if (i >= n) return done(JsonScanStatus::kUnterminated);  // "\<EOF>
+        const unsigned char e = static_cast<unsigned char>(data[i]);
+        ++i;
+        if (e == 'u') {
+          // \uXXXX: consume up to four more chars UNCONDITIONALLY without
+          // checking hex-ness. Validity is nlohmann's call, not ours; the
+          // point is that <4 or non-hex digits can never desync our string
+          // tracking (a '"' swallowed here is part of the escape unit, so it
+          // never terminates the string early and braces never leak out).
+          for (int k = 0; k < 4 && i < n; ++k) ++i;
+        }
+        // e == any other char: already consumed — 2-char unit total.
+      } else {
+        // Any other byte: raw control bytes (0x00-0x1F — nlohmann rejects
+        // them as unescaped controls), UTF-8 payload, anything: non-structural.
+        ++i;
+      }
+      continue;
+    }
+    // Outside a string: only structure characters matter.
+    if (c == '"') {
+      in_string = true;
+      ++i;
+    } else if (c == '{' || c == '[') {
+      ++depth;
+      if (depth > max_depth) max_depth = depth;
+      if (depth > kMaxJsonDepth) return done(JsonScanStatus::kDepthExceeded);
+      ++i;
+    } else if (c == '}' || c == ']') {
+      // Stray closer on malformed input: clamp, never trip (a negative depth
+      // must not become a false "depth exceeds" verdict — nlohmann judges).
+      if (depth > 0) --depth;
+      ++i;
+    } else {
+      ++i;  // whitespace, digits, ':', ',', invalid bytes: non-structural
+    }
+  }
+  if (in_string) return done(JsonScanStatus::kUnterminated);
+  return done(JsonScanStatus::kOk);
+}
+
+sf_result_t checked_parse(const char* data, size_t len, json* out, std::string* err_out) {
+  if (!data) {
+    if (err_out) *err_out = "parse: null input";
+    return SF_E_INVALID_ARG;
+  }
+  // (1) 8 MiB byte cap — enforced pre-parse, never post-parse (same code and
+  // message from_json used before P7).
+  if (len > kMaxDocBytes) {
+    if (err_out) *err_out = "JSON input exceeds 8 MiB limit";
+    return SF_E_FILE_TOO_LARGE;
+  }
+  // (2) Depth gate. Distinct pre-reject texts (SEC-G3-8): depth vs.
+  // unterminated string are always distinguishable — an unterminated string
+  // NEVER trips the depth text even on a >256-deep document.
+  int max_depth = 0;
+  const JsonScanStatus st = scan_json_depth(data, len, &max_depth);
+  if (st == JsonScanStatus::kDepthExceeded) {
+    if (err_out) *err_out = "schema: json depth exceeds " + std::to_string(kMaxJsonDepth);
+    return SF_E_SCHEMA;
+  }
+  if (st == JsonScanStatus::kUnterminated) {
+    if (err_out) *err_out = "schema: unterminated string in json";
+    return SF_E_SCHEMA;
+  }
+  // (3) nlohmann — untouched parser. Malformed-but-shallow input reaches it
+  // and yields the nlohmann verdict; parse exceptions propagate to callers.
+  if (out) *out = json::parse(data, data + len);
+  return SF_OK;
+}
+
+}  // namespace sfcore
+
 extern "C" sf_result_t sf_validate_project_json(const char* json, size_t len, char* err_buf,
                                                 size_t err_cap) {
   if (!json || !err_buf || err_cap == 0) {
@@ -483,7 +584,18 @@ extern "C" sf_result_t sf_validate_project_json(const char* json, size_t len, ch
     return SF_E_INVALID_ARG;
   }
   try {
-    sfcore::json j = sfcore::json::parse(json, json + len);
+    // G3 P7 (SEC-G3-7): shared pre-parse gate — 8 MiB byte cap + depth scan,
+    // then nlohmann. Pre-rejects are only byte-cap / depth>256 / unterminated
+    // string; everything else reaches nlohmann unchanged (SEC-G3-8).
+    std::string perr;
+    sfcore::json j;
+    const sf_result_t rc = sfcore::checked_parse(json, len, &j, &perr);
+    if (rc != SF_OK) {
+      sfcore::set_last_error(perr);
+      std::strncpy(err_buf, perr.c_str(), err_cap - 1);
+      err_buf[err_cap - 1] = '\0';
+      return rc;
+    }
     std::string err;
     if (!sfcore::validate_doc_json(j, err)) {
       if (!err.empty()) {

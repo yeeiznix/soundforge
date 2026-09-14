@@ -190,3 +190,26 @@ TEST(SchemaValidate, DspPresetRefNumberRejected) {
     EXPECT_NE(std::string(err).find("dspPresetRef"), std::string::npos)
         << "Expected 'dspPresetRef' error, got: " << err;
 }
+
+// G3 P7 depth coupling: the validator now pre-parses nesting depth via
+// checked_parse(). A 256-deep doc passes the gate and reaches the SCHEMA
+// verdict; only >256 trips the dedicated pre-reject text.
+static std::string nested_arrays(int n) {
+    std::string s;
+    for (int i = 0; i < n; ++i) s += "[";
+    for (int i = 0; i < n; ++i) s += "]";
+    return s;
+}
+
+TEST(SchemaValidate, DepthGate256PassesToSchema257PreRejected) {
+    const std::string d256 = nested_arrays(256);
+    char err[512] = {0};
+    EXPECT_EQ(sf_validate_project_json(d256.data(), d256.size(), err, sizeof(err)), SF_E_SCHEMA);
+    // The depth gate did NOT trip (err is a schema/parse verdict, not "depth").
+    EXPECT_EQ(std::string(err).find("json depth"), std::string::npos) << err;
+    EXPECT_NE(std::string(err).find("root: expected JSON object"), std::string::npos) << err;
+
+    const std::string d257 = nested_arrays(257);
+    EXPECT_EQ(sf_validate_project_json(d257.data(), d257.size(), err, sizeof(err)), SF_E_SCHEMA);
+    EXPECT_EQ(std::string(err), "schema: json depth exceeds 256");
+}

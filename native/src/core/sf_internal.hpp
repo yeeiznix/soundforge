@@ -369,10 +369,57 @@ inline size_t utf8_char_count(const char* s) {
   return count;
 }
 
-// G3 P7 placeholder: pre-parse JSON nesting cap (checked_parse() in schema.cpp
-// enforces it). Declared here so P1 keeps the shared internal surface in one
-// place; unused until P7 lands the scanner.
+// ---------------------------------------------------------------------------
+// G3 P7 — JSON depth pre-parse gate (PLAN_G3 §6 P7; SEC-G3-7/-G3-8)
+// ---------------------------------------------------------------------------
+// Pre-parse JSON nesting cap, enforced by scan_json_depth() BEFORE nlohmann
+// parses on all 4 raw-JSON entry points (sf_project_from_json,
+// sf_project_open_from_path, sf_validate_project_json, sf_migrate_json).
+//
+// Residual G3-1 — nlohmann fork BLOCKED, documented (do NOT implement): the
+// vendored nlohmann 3.11.3 parser has NO nesting-depth limit (the upstream
+// depth_limit parameter only landed in 3.12.0), so deeply nested documents
+// recurse against the host stack — the exact exposure this gate bounds.
+// Adopting a newer nlohmann would mean vendoring/patching a third-party
+// dependency; no such patch is available in this environment, so the fork is
+// BLOCKED and the iterative pre-parse scanner is the sanctioned mitigation
+// (PLAN_G3 §10.1). Parser behavior itself is NEVER modified.
 const int kMaxJsonDepth = 256;
+
+// Verdicts of the depth scanner. SEC-G3-8 contract: the scanner ONLY ever
+// pre-rejects with kDepthExceeded (structural nesting > kMaxJsonDepth) or
+// kUnterminated (a string ran to end of input) — nothing else. Both are a
+// subset of nlohmann's rejections (nlohmann always rejects unterminated
+// strings; there is no nlohmann-accepted input that is >256 deep that this
+// gate is not allowed to reject by design). Malformed-but-shallow input is
+// deliberately left for nlohmann so its verdict is never changed by the
+// scanner (malformed JSON still yields the nlohmann result).
+enum class JsonScanStatus : int {
+  kOk = 0,
+  kDepthExceeded = 1,
+  kUnterminated = 2,
+};
+
+// Strict ITERATIVE string/escape-aware structural-depth scanner (defined in
+// schema.cpp). Walks the bytes ONE escape-char-at-a-time: tracks { } [ ]
+// nesting outside strings only, skipping strings, escapes, \uXXXX units
+// (4 chars consumed unconditionally — hex validity is nlohmann's call, see
+// impl comment), raw control bytes, and braces/escapes inside strings.
+// NEVER re-implements the JSON parser — a stray '}' on malformed input clamps
+// at 0 instead of tripping. *max_depth_out receives the deepest nesting seen
+// (0 for a bare scalar, 1 for a bare {}). O(n), zero per-char allocation.
+JsonScanStatus scan_json_depth(const char* data, size_t len, int* max_depth_out);
+
+// SEC-G3-7: shared pre-parse gate for ALL 4 raw-JSON entry points. Order:
+//   (1) 8 MiB byte cap (kMaxDocBytes)  -> SF_E_FILE_TOO_LARGE,
+//       "JSON input exceeds 8 MiB limit" (same text from_json used);
+//   (2) scan_json_depth()              -> SF_E_SCHEMA, distinct texts
+//       "schema: json depth exceeds 256" | "schema: unterminated string in json";
+//   (3) nlohmann parse (unchanged parser; exceptions PROPAGATE to the caller's
+//       existing try/catch — checked_parse never swallows parse errors).
+// On pre-reject *out is untouched and the message is written to *err_out
+// (may be NULL). Internal only — no public ABI addition.
+sf_result_t checked_parse(const char* data, size_t len, json* out, std::string* err_out);
 
 // ---------------------------------------------------------------------------
 // JSON codec (json_codec.cpp)
