@@ -318,6 +318,13 @@ Two drive modes, one render path:
 `max_block_frames` must be `1..512` (`kBlockMaxSamples`). A single tick's
 `frames` must be `1..max_block_frames`, and a tick is rejected with `SF_E_IO`
 unless the engine is RUNNING.
+**Defensive bound (SEC-G4-04):** `render_chain_planned` itself must reject
+`block.n > kBlockMaxSamples` (return false + `err`) at its entry, and the engine
+`tick` must re-validate `frames <= max_block_frames <= kBlockMaxSamples`
+before touching the plan — a single off-by-one in caller validation must never
+become an out-of-bounds write past the fixed 512-float per-node pool
+(`render_plan.cpp:125-136` writes `j < n` into `kBlockMaxSamples` arrays).
+P4 pins the `frames` bound test at BOTH edges (1 and max_block_frames).
 
 **Rationale.** A deterministic primitive is what makes a *host* engine provable
 in ctest (no flaky timing); the pacer exists only to exercise "periodic callback"
@@ -359,6 +366,36 @@ deterministic path.
 
 - `reset_meters` zeroes the latches (counter behavior documented: it resets the
   latch, not the rendered-frame counter).
+
+**Meter buffer contract (SEC-G4-01, mandatory before P4):** `meter_json` must
+mirror the fleet convention of `sf_queue_runner_last_report`
+(`sf_queue_runner.h:74-75`, `command_queue_thread.cpp:271-273,280-284`):
+- NULL `e`/`buf` or `cap == 0` → `SF_E_INVALID_ARG` (matches
+  `sf_queue_runner_last_report`; do NOT overload `SF_E_NOMEM`).
+- `cap > 0` but too small for the serialized payload → `SF_E_NOMEM` **and
+  `buf[0] = '\0'`** — never a partial/truncated non-JSON payload.
+- Serialization must be **bounded and locale-independent**: serialize into a
+  fixed local buffer (fixed key set, numeric-only content), then do exactly one
+  sized copy into `buf`; use C-locale/`std::to_chars`-style formatting (never
+  `%g`/`%f` under a comma-decimal locale, which emits invalid JSON).
+- P4 tests must assert `buf[0] == '\0'` on `SF_E_NOMEM` and the full-size
+  bound (cap == exact serialized length succeeds; cap-1 → NOMEM).
+
+**Meter synchronization layer (SEC-G4-02, mandatory before P4):**
+`TruePeak` (`true_peak.hpp:32-33`, `:70-71`) is **single-thread-only by
+contract** — plain `double m_latch[2]`, `float m_tail[2][24]` members. The
+engine's pacer thread runs `process()` while callers may invoke
+`meter_json`/`reset_meters`, so a naive direct read/write of those members
+across threads is a C++ data race (UB). P4 must therefore implement **one** of
+these under the engine (chosen at P4, both pinned by a concurrent test):
+(a) a single engine mutex guarding `process`/`latch`/`reset` **and**
+`meter_json`/`reset_meters` (tick/pacer contend only with meter reads — bounded,
+no lock in the render kernels themselves), with `TruePeak` remaining
+single-thread-owned; or (b) engine-owned atomics + a generation counter for the
+published meter values, with **no cross-thread access to `TruePeak` members**.
+Regardless of choice: `tick` vs PACE concurrency stays rejected (`SF_E_IO`),
+and there must be a P4 test running PACE-style `tick` concurrently with
+`meter_json`/`reset_meters` (UBSan clean) proving no data race.
 
 **Headline acceptance:** a full-scale sine at `fs/4` with a π/4 phase offset has
 sample peak `A/√2` but true peak `A` → **+3.01 dB** above sample peak. This is
@@ -538,17 +575,31 @@ sf_result_t sf_audio_engine_reset_meters(sf_audio_engine_t* e);   /* 11 */
   > exactly as in G3.
 - `configure` / `set_output` — **CREATED only** (pre-start); `SF_E_IO` otherwise.
   A NULL `out_node_id`/`""` selects "no output" (renders silence).
-- `start` — **compiles+publishes snapshot #0 from the IDLE document**, then
-  starts the runner, optionally starts the pacer. (Snapshot #0 must precede the
-  start: the runner is not yet RUNNING, so the caller-owned doc is readable and
-  no guard is violated.) One-shot: from RUNNING → `SF_E_IO "audio engine:
-  already started"`.
+- `start` — **ordered gate + snapshot #0 + rollback (SEC-G4-05):** (1) first
+  acquire-load `p.runnerState` and reject (`SF_E_IO`) if a runner is already
+  live (`runner_thread_alive(...)` or `runnerState != IDLE`) **before** reading
+  `proj->doc` or compiling snapshot #0 — a standalone runner could otherwise be
+  created in the create→start window because `sf_queue_runner_create` only
+  *checks* `runnerState` without reserving it (SEC-G4-05, R-D);
+  (2) **compiles+publishes snapshot #0 from the IDLE document** (runner not yet
+  RUNNING → caller-owned doc readable, no guard violated); (3) starts the
+  internal runner, then optionally the pacer; **(4) rollback:** if the internal
+  runner start (or pacer spawn) fails after snapshot #0 was published, stop+join
+  what was started, restore the slot/store to the pre-start state (snapshot #0
+  unpublished or marked stale), return `SF_E_IO`, and leave the engine CREATED
+  (not RUNNING) so `destroy` still works. One-shot: from RUNNING → `SF_E_IO
+  "audio engine: already started"`.
 - `tick` — RUNNING only; the deterministic render primitive. `tick` and the
   pacer must never run concurrently: `start(PACE)` sets a flag and `tick`
   returns `SF_E_IO` while PACE is active (documented + tested).
 - `stop`/`join`/`destroy` — mirror the runner (STOPPING/STOPPED, idempotent,
   destroy requires not-RUNNING **and not STOPPING** — STOPPING means the thread
   is still alive and `sf_queue_runner_destroy` would return `SF_E_IO`).
+  **NULL/double-destroy (SEC-G4-10):** `destroy(NULL)` → `SF_OK` no-op;
+  double-destroy of a live handle = caller UB (documented one-shot, same as the
+  runner — `sf_queue_runner.h:80-85`); the `audioEngine` claim release
+  (CAS e → nullptr) runs **before/independently of freeing the engine** so a
+  failed-create rollback can never leave the claim set.
 - **Destroy ordering (R-D, must be exact):** `join pacer thread` → `runner.stop()`
   → `runner.join()` → **detach observer (set the runner's observer pointer null)**
   → `sf_queue_runner_destroy(internal)` → free snapshot store → free engine →
@@ -915,9 +966,12 @@ residuals table.
 | G4-2 | True peak is a 4× polyphase approximation, not a certified ITU-R BS.1770 meter | LOW | Documented tolerances; revisit if certification is required |
 | G4-3 | Pacer timing is best-effort (no RT priority/affinity under proot) | LOW (env) | Deterministic tick is the authoritative path; device/CI lane when available |
 | G4-4 | Output target is fixed pre-start; no runtime retargeting | LOW | `configure`/`set_output` are pre-start by contract; revisit with a live-control command |
-| G4-5 | Plan memory scales with node count (~4 KB/node pool) | LOW | Bounded by graph size; compile-failure path renders silence |
+| G4-5 | Plan memory scales with node count (~4 KB/node pool) | LOW | Bounded by graph size; compile-failure path renders silence. **SEC-G4-08:** derived bound is 4 plans × N × ~4 KB (~16 KB/node) held live; OOM is contained (`planValid:false` + last-valid retention is the contract, `render_plan.cpp:105-108`); a compile-time node cap or pre-size check before pool build is a possible hardening, not a gate blocker |
 | G4-6 | `std::atomic<double>` used for meter fields (lock-free on aarch64/x86; not guaranteed everywhere) | LOW | Per-field atomics + generation guard; document the assumption |
-| G4-7 | Independent two-reviewer gate (@oracle + @security-reviewer) could not run in-environment (`subagent_depth`=1); §10.4 is a single-reviewer pass | LOW (process) | Run the two-reviewer gate before the gate tag if project process requires it; findings are source-cited and each amendment is reversible |
+| G4-7 | Independent two-reviewer gate (@oracle + @security-reviewer) could not run in-environment (`subagent_depth`=1); §10.4 is a single-reviewer pass | LOW (process) | **RESOLVED at gate time by the orchestrator:** the two-reviewer gate ran out-of-band (oracle `ses_f5e210e6…` = P1/P2 PASS + plan executable; security `ses_f5e1130f…` = APPROVE-WITH-AMENDMENT, 10 findings SEC-G4-01…10 below). Amendments SEC-G4-01/02/05 are mandatory before P4; the rest are documented residuals |
+| G4-8 | `sf_project_destroy` (void, SEC-G3-2 pattern) cannot see an attached engine in CREATED/stopped state (SEC-G4-06) | LOW (posture) | Same posture as the G3 IDLE-runner hole; document in `sf_audio_engine.h` + §4.5 that engine destroy is mandatory before project destroy; optional hardening = refuse free while `audioEngine != nullptr`; P4 ordering test |
+| G4-9 | `alloc_counter` replaces only default-aligned throwing `operator new`/`new[]` (SEC-G4-07) | LOW | Over-aligned allocations would evade the zero-alloc assertion (false negative); add aligned `new`/`delete` overloads or comment the default-alignment precondition; file stays test-only (referenced only from tests/unit, never a production target) |
+| G4-10 | Callback error/rollback paths unspecified (SEC-G4-09) | LOW | Specify: any non-`SF_OK` from `io.read` → render silence (never abort); non-`SF_OK` from `io.write` → block skipped; a throwing C++ callback is contained (catch → treated as non-`SF_OK`); pacer-spawn failure after runner start → stop+join the runner, return `SF_E_IO`, restore CREATED (rollback detail pinned in §4.5 `start`, SEC-G4-05) |
 
 ### 10.3 Open questions — resolved (pre-execution review)
 
@@ -937,6 +991,15 @@ residuals table.
 > marked as such for honesty. It is *not* a substitute for the independent
 > two-reviewer gate if that gate is required by the project's process; the
 > findings below are nonetheless evidence-backed and each cites `file:line`.
+>
+> **Gate-time update (orchestrator, post-draft):** the independent two-reviewer
+> gate DID run out-of-band at execution time (oracle + security-reviewer over
+> the committed plan and P1/P2). Results: oracle — **plan executable as-is,
+> P1 PASS, P2 PASS** (findings ORC-G4-01…06, no HIGH, recorded below);
+> security — **APPROVE-WITH-AMENDMENT** (findings SEC-G4-01…10; SEC-G4-01/02/05
+> mandatory before P4; SEC-G4-03 folded into P3; remainder documented in §10.2
+> as G4-8…G4-10). P3 carries ORC-G4-03/SEC-G4-03 (exception containment +
+> compile-failure tests) and P4 carries SEC-G4-01/02/04/05/06/10.
 
 | # | Decision (ref) | Verdict | Findings / amendments |
 |---|---|---|---|
@@ -953,7 +1016,7 @@ residuals table.
 | B-1 | MED | `sfmeasurement` INTERFACE target is the shipped name; plan said `sfmeasure` without noting the rename, and the top-level `add_subdirectory` loop configures `src/measurement`. | P2 file list + §2 note the explicit rename `sfmeasurement → sfmeasure`. |
 | B-2 | MED | `sfaudio` link list in §2 omitted `sfgraph`, but the engine calls `render_chain_planned`/`compile_render_plan` (in `sfgraph`). | §2 + P4 set `sfaudio → {sfcore, sfgraph, sfmeasure}`. |
 | B-3 | MED | `true_peak.hpp` was implicitly tied to `AudioBlock` (`dsp_internal.hpp`), which would make `sfmeasure` depend on `sfdsp` and violate the stated leaf rule. | D3/P2 now specify raw `float* const*` channels; `sfmeasure` includes no SoundForge target and stays a leaf. |
-| B-4 | LOW | `meter_json` buffer contract (cap=0, tiny cap, null term) was unspecified. | P4 acceptance + E-R-D note: `SF_E_NOMEM` on too-small cap, never over-write, null-terminate. |
+| B-4 | LOW | `meter_json` buffer contract (cap=0, tiny cap, null term) was unspecified. | P4 acceptance + E-R-D note: `SF_E_NOMEM` on too-small cap, never over-write, null-terminate. **SEC-G4-01 (security gate, mandatory before P4):** split error codes (NULL `e`/`buf`/`cap==0` → `SF_E_INVALID_ARG` matching `sf_queue_runner_last_report`; too-small `cap>0` → `SF_E_NOMEM` + `buf[0]='\0'`, never a truncated payload); bounded local serialization with one sized copy; locale-independent formatting (`std::to_chars`-style, never `%g`/`%f` under comma-decimal locale). Full contract now in §4.3 |
 | B-5 | LOW | `planValid` observability flag was only prose ("an observable meter/status flag"). | Added to the D3 JSON shape and P4 acceptance. |
 | B-6 | LOW | G4 test-count estimate (~45, 232→~277) is an estimate; the true count is set by gtest-discovered cases. | §8 keeps "≈" and the evidence-first rule (growth is fine). |
 
