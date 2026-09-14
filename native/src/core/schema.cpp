@@ -248,6 +248,13 @@ bool validate_doc_json(const json& j, std::string& errOut) {
           if (n["mixer"].contains("pan") && !n["mixer"]["pan"].is_number())
             add(nctx + ".mixer: 'pan' must be a number");
         }
+        // SEC-G3-10: dspPresetRef is string|null; missing key tolerated
+        // (legacy docs — "" means none). Any other type is rejected so the
+        // native validator stays in parity with the Python mirror.
+        if (n.contains("dspPresetRef")) {
+          if (!n["dspPresetRef"].is_null() && !n["dspPresetRef"].is_string())
+            add(nctx + ": 'dspPresetRef' must be a string or null");
+        }
         ++ni;
       }
     }

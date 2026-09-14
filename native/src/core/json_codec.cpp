@@ -125,6 +125,9 @@ json doc_to_json(const SfProjectDoc& d) {
                   {"solo", node.mixer.solo},
                   {"gainDb", node.mixer.gainDb},
                   {"pan", node.mixer.pan}};
+    // G3 P5: dspPresetRef on the wire — "" (none) serializes as null,
+    // non-empty as the referenced dspPresets[].id.
+    n["dspPresetRef"] = node.dspPresetRef.empty() ? json(nullptr) : json(node.dspPresetRef);
     nodes.push_back(n);
   }
   json edges = json::array();
@@ -235,6 +238,14 @@ bool doc_from_json(const json& j, SfProjectDoc& out, std::string& err) {
         node.mixer.solo = n["mixer"].value("solo", false);
         node.mixer.gainDb = n["mixer"].value("gainDb", 0.0);
         node.mixer.pan = n["mixer"].value("pan", 0.0);
+      }
+      // G3 P5: tolerant read — legacy docs without the key (and JSON null)
+      // map to "" (none); a non-string value also degrades to "" (the
+      // validator rejects it before this point on strict paths). Note: the
+      // vendored nlohmann value() has no string special-case — it throws
+      // type_error.302 on null, so the read is explicit (D6-amd parity).
+      if (n.contains("dspPresetRef") && n["dspPresetRef"].is_string()) {
+        node.dspPresetRef = n["dspPresetRef"].get<std::string>();
       }
       out.signalGraph.nodes.push_back(node);
     }

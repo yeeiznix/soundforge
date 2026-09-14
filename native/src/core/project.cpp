@@ -482,6 +482,15 @@ extern "C" sf_result_t sf_project_health_check(const sf_project_t* p, char* repo
           errors.push_back("dangling graph edge to " + e.toNodeId);
         }
       }
+      // SEC-G3-9 (D6-amd): every non-empty dspPresetRef must resolve to an
+      // existing dspPresets[].id. ""/null = none — never an error.
+      std::set<std::string> preset_ids;
+      for (const auto& env : doc.dspPresets) preset_ids.insert(env.id);
+      for (const auto& n : g.nodes) {
+        if (!n.dspPresetRef.empty() && !preset_ids.count(n.dspPresetRef)) {
+          errors.push_back("dangling graph dspPresetRef " + n.dspPresetRef + " on node " + n.id);
+        }
+      }
       std::vector<std::string> order;
       std::string topo_err;
       if (!sfcore::topological_order(g, order, topo_err)) {

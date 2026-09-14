@@ -2,6 +2,7 @@
 
 #include "soundforge/sf_project.h"
 #include "soundforge/sf_schema.h"
+#include "nlohmann/json.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -148,4 +149,44 @@ TEST(SchemaValidate, CheckGraphEdgeDangling) {
     EXPECT_EQ(sf_validate_project_json(json_dangling.data(), json_dangling.size(), err, sizeof(err)), SF_E_SCHEMA);
     std::string err_str(err);
     EXPECT_TRUE(err_str.find("unknown node") != std::string::npos) << "Expected 'unknown node' error, got: " << err;
+}
+
+TEST(SchemaValidate, DspchainV2Passes) {
+    // G3 P5: the DspChain fixture carries dspPresetRef on the wire (string on
+    // the processor, null on the source, key absent on the output) — the
+    // refreshed schema must accept all three forms.
+    std::string s = read_file(FIXTURES_DIR "/project_dspchain_v2.json");
+    char err[512] = {0};
+    EXPECT_EQ(sf_validate_project_json(s.data(), s.size(), err, sizeof(err)), SF_OK)
+        << "err=" << err;
+}
+
+TEST(SchemaValidate, DspPresetRefNullOrStringOk) {
+    // SEC-G3-10: null and "" both mean "none" and always type-check; a
+    // non-empty string ref type-checks too (existence is a graph-validate /
+    // health-check concern, not a schema concern).
+    std::string s = read_file(FIXTURES_DIR "/project_dspchain_v2.json");
+    nlohmann::json doc = nlohmann::json::parse(s);
+    char err[512] = {0};
+    doc["signalGraph"]["nodes"][0]["dspPresetRef"] = nullptr;
+    const std::string d1 = doc.dump();
+    EXPECT_EQ(sf_validate_project_json(d1.data(), d1.size(), err, sizeof(err)), SF_OK)
+        << "err=" << err;
+    doc["signalGraph"]["nodes"][0]["dspPresetRef"] = "";
+    const std::string d2 = doc.dump();
+    EXPECT_EQ(sf_validate_project_json(d2.data(), d2.size(), err, sizeof(err)), SF_OK)
+        << "err=" << err;
+}
+
+TEST(SchemaValidate, DspPresetRefNumberRejected) {
+    // SEC-G3-10: a number-typed ref is rejected by the native validator —
+    // parity with the Python mirror (test_schema_py.py asserts the same).
+    std::string s = read_file(FIXTURES_DIR "/project_dspchain_v2.json");
+    nlohmann::json doc = nlohmann::json::parse(s);
+    doc["signalGraph"]["nodes"][1]["dspPresetRef"] = 3;
+    const std::string d = doc.dump();
+    char err[512] = {0};
+    EXPECT_EQ(sf_validate_project_json(d.data(), d.size(), err, sizeof(err)), SF_E_SCHEMA);
+    EXPECT_NE(std::string(err).find("dspPresetRef"), std::string::npos)
+        << "Expected 'dspPresetRef' error, got: " << err;
 }

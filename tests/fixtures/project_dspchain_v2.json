@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 2,
+  "engineVersion": "0.1.0-g3",
+  "project": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "name": "DspChain Test",
+    "createdAt": "2026-09-13T00:00:00.000Z",
+    "modifiedAt": "2026-09-13T00:00:00.000Z",
+    "author": "Tester",
+    "notes": "G3 P5 wire proof: signalNode.dspPresetRef on the wire (DspChain)"
+  },
+  "venue": {
+    "id": "660e8400-e29b-41d4-a716-446655440000",
+    "name": "Test Venue",
+    "dimensions": {
+      "widthM": 12.0,
+      "depthM": 10.0,
+      "heightM": 4.0
+    }
+  },
+  "scene": {
+    "id": "770e8400-e29b-41d4-a716-446655440000",
+    "name": "Default Scene",
+    "venueRef": "660e8400-e29b-41d4-a716-446655440000",
+    "geometry": {
+      "center": { "x": 6.0, "y": 5.0, "z": 2.0 },
+      "listening": { "x": 6.0, "y": 5.0, "z": 2.0 }
+    }
+  },
+  "audienceReceivers": [],
+  "equipment": [],
+  "signalGraph": {
+    "nodes": [
+      {
+        "kind": "source",
+        "id": "a10e8400-e29b-41d4-a716-446655440001",
+        "label": "Input Source",
+        "position": { "x": 0.0, "y": 0.0 },
+        "mixer": { "mute": false, "solo": false },
+        "dspPresetRef": null
+      },
+      {
+        "kind": "processor",
+        "id": "a10e8400-e29b-41d4-a716-446655440002",
+        "label": "EQ Processor",
+        "position": { "x": 100.0, "y": 50.0 },
+        "mixer": { "mute": false, "solo": true },
+        "dspPresetRef": "b20e8400-e29b-41d4-a716-44665544ab01"
+      },
+      {
+        "kind": "output",
+        "id": "a10e8400-e29b-41d4-a716-446655440003",
+        "label": "Main Output",
+        "position": { "x": 200.0, "y": 100.0 },
+        "mixer": { "mute": true, "solo": false }
+      }
+    ],
+    "edges": [
+      {
+        "from": "a10e8400-e29b-41d4-a716-446655440001",
+        "to": "a10e8400-e29b-41d4-a716-446655440002",
+        "label": "Signal Path 1",
+        "id": "c10e8400-e29b-41d4-a716-446655440001"
+      },
+      {
+        "from": "a10e8400-e29b-41d4-a716-446655440002",
+        "to": "a10e8400-e29b-41d4-a716-446655440003",
+        "label": "Signal Path 2",
+        "id": "c10e8400-e29b-41d4-a716-446655440002"
+      }
+    ],
+    "mixers": [
+      {
+        "nodeId": "a10e8400-e29b-41d4-a716-446655440002",
+        "gains": { "master": 0.8 },
+        "mute": false,
+        "solo": true
+      }
+    ]
+  },
+  "powerGraph": {
+    "nodes": [],
+    "edges": []
+  },
+  "audioAssets": [],
+  "dspPresets": [
+    {
+      "id": "b20e8400-e29b-41d4-a716-44665544ab01",
+      "type": "dspPreset",
+      "version": 1,
+      "createdAt": "2026-09-13T00:00:00.000Z",
+      "modifiedAt": "2026-09-13T00:00:00.000Z",
+      "provenance": "created",
+      "data": { "name": "EQ Chain" }
+    }
+  ],
+  "arrayConfigurations": [],
+  "measurements": [],
+  "simulationRuns": [],
+  "trainingScenarios": [],
+  "inventoryRefs": [],
+  "reports": [],
+  "auditLog": [
+    {
+      "ts": "2026-09-13T00:00:00.000Z",
+      "actor": "system",
+      "action": "project.create",
+      "objectId": "550e8400-e29b-41d4-a716-446655440000",
+      "detail": "schemaVersion 2"
+    },
+    {
+      "ts": "2026-09-13T00:00:01.000Z",
+      "actor": "tester",
+      "action": "graph.setPreset",
+      "objectId": "a10e8400-e29b-41d4-a716-446655440002",
+      "detail": "preset=b20e8400-e29b-41d4-a716-44665544ab01"
+    }
+  ]
+}

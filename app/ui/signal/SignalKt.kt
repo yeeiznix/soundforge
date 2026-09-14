@@ -7,11 +7,12 @@
 // JSON shape mirrored here (project_v2.json $defs.signalNode / signalEdge):
 //   signalGraph: { nodes: [ { kind: "source"|"processor"|"output"|"bus",
 //                            id, label, position: {x, y},
-//                            mixer: {mute, solo, gainDb, pan} } ],
+//                            mixer: {mute, solo, gainDb, pan},
+//                            dspPresetRef: string|null } ],
 //                  edges: [ { from, to, label, id } ] }
-// gainDb/pan and edge ids cross the wire as of P7 (additive schema refresh,
-// schemaVersion stays 2); dspPresetRef and edge ports are still off-wire —
-// they parse to defaults and are tracked locally by the ViewModels.
+// gainDb/pan, edge ids and dspPresetRef cross the wire (additive schema
+// refreshes, schemaVersion stays 2); edge ports are still off-wire — they
+// parse to defaults and are tracked locally by the ViewModels.
 // Committed-doc-is-truth holds for everything on the wire.
 package id.soundforge.pastudio.signal
 
@@ -39,20 +40,19 @@ fun signalNodeKindName(kind: Int): String = when (kind) {
     else -> "source"
 }
 
-/** Read-only signal-node snapshot. gainDb/pan/mute/solo are on the wire;
- *  dspPresetRef is NOT (mixer-setter input) — it defaults to "" and the
- *  ViewModels track the latest committed value locally. */
+/** Read-only signal-node snapshot. All fields except edge ports are on the
+ *  v2 wire; dspPresetRef is string|null (null and "" both mean none). */
 data class SignalNodeKt(
     val id: String,
     val kind: Int,          // SF_NODE_* (1..4)
     val name: String,       // wire "label"
     val x: Double,          // wire position.x
     val y: Double,          // wire position.y
-    val gainDb: Double = 0.0,   // not on the v2 wire (mixer setter value)
-    val pan: Double = 0.0,      // not on the v2 wire
+    val gainDb: Double = 0.0,   // wire mixer.gainDb
+    val pan: Double = 0.0,      // wire mixer.pan
     val mute: Boolean,          // wire mixer.mute
     val solo: Boolean,          // wire mixer.solo
-    val dspPresetRef: String = "", // not on the v2 wire; "" = none
+    val dspPresetRef: String? = null, // wire "dspPresetRef"; null/"" = none
 )
 
 /** Read-only signal-edge snapshot. The edge id is on the wire as of P7 (so
@@ -98,6 +98,8 @@ private fun signalNodeOf(node: JSONObject): SignalNodeKt? = runCatching {
         pan = mixer?.optDouble("pan", 0.0) ?: 0.0,
         mute = mixer?.optBoolean("mute", false) ?: false,
         solo = mixer?.optBoolean("solo", false) ?: false,
+        // ""/null both mean "none" -> unified to null in the mirror.
+        dspPresetRef = node.optString("dspPresetRef", "").ifEmpty { null },
     )
 }.getOrNull()
 

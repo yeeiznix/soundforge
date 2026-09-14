@@ -212,7 +212,8 @@
             "gainDb": { "type": "number" },
             "pan": { "type": "number" }
           }
-        }
+        },
+        "dspPresetRef": { "type": ["string", "null"] }
       }
     },
     "signalEdge": {

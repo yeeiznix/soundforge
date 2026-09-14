@@ -213,7 +213,18 @@ sf_result_t sf_graph_validate(sf_project_t* p, char* report_buf, size_t report_c
       }
     }
 
-    // 3. Routing-rule violations: edge into a source, edge out of an output.
+    // 3. dspPresetRef must resolve to an existing dspPresets[].id (SEC-G3-9,
+    // D6-amd). ""/null = none and never trips the check — wire-level clear
+    // semantics equals sf_graph_set_preset(p, n, "").
+    std::set<std::string> preset_ids;
+    for (const auto& env : proj->doc.dspPresets) preset_ids.insert(env.id);
+    for (const auto& n : g.nodes) {
+      if (!n.dspPresetRef.empty() && !preset_ids.count(n.dspPresetRef)) {
+        errors.push_back("node " + n.id + " dangling dspPresetRef " + n.dspPresetRef);
+      }
+    }
+
+    // 4. Routing-rule violations: edge into a source, edge out of an output.
     for (const auto& e : g.edges) {
       const auto* to_node = sfcore::find_node(g, e.toNodeId);
       if (to_node && to_node->kind == SfNodeSource) {
@@ -225,14 +236,14 @@ sf_result_t sf_graph_validate(sf_project_t* p, char* report_buf, size_t report_c
       }
     }
 
-    // 4. Cycles.
+    // 5. Cycles.
     std::vector<std::string> order;
     std::string topo_err;
     if (!sfcore::topological_order(g, order, topo_err)) {
       errors.push_back("cycle detected: " + topo_err);
     }
 
-    // 5. Orphans — non-source nodes unreachable from any source (warning, §3.3).
+    // 6. Orphans — non-source nodes unreachable from any source (warning, §3.3).
     for (const auto& n : g.nodes) {
       if (n.kind == SfNodeSource) continue;
       bool reachable = false;

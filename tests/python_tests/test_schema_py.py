@@ -71,8 +71,8 @@ def test_golden_v2_immutable():
     path = REPO_ROOT / "tests" / "golden" / "schema_golden_v2.json"
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     # SHA-256 computed from the regenerated file (byte-identical to project_schema.json).
-    # G2 P7: additive refresh — node.mixer gains gainDb/pan, signalEdge gains id.
-    assert digest == "5888afd57750da70e42a87e1b35b405201a5b3568b2d79f85914e20f25f27aea"
+    # G3 P5: additive refresh — signalNode gains dspPresetRef (string|null, "" -> null).
+    assert digest == "a53b26a7dbfa62c3571b7d1298309072da7fec3a5a266dff6a6ea626f87ae296"
 
 
 def test_validate_signalgraph_v2():
@@ -83,3 +83,33 @@ def test_validate_graph_corrupt():
     errors = validate_project(_load("project_graph_corrupt.json"))
     # 4 errors: invalid node kind, mixer missing nodeId, dangling edge, cycle.
     assert len(errors) >= 4, errors
+
+
+def test_validate_dspchain_v2():
+    # G3 P5 (D6-amd): the new fixture carries dspPresetRef (string + null) on
+    # the wire — must validate cleanly against the refreshed canonical schema.
+    errors = validate_project(_load("project_dspchain_v2.json"))
+    assert errors == [], errors
+
+
+def test_dsp_preset_ref_number_rejected():
+    # G3 P5 (SEC-G3-10): dspPresetRef is string|null — a number-typed ref must
+    # be rejected (native/Python parity; the Python mirror reads the canonical
+    # schema file, so this also proves the schema refresh shipped).
+    data = _load("project_dspchain_v2.json")
+    node = data["signalGraph"]["nodes"][1]
+    assert node["dspPresetRef"] is not None  # the processor carries a ref
+    node["dspPresetRef"] = 3
+    errors = validate_project(data)
+    assert len(errors) > 0, errors
+    assert any("dspPresetRef" in e for e in errors), errors
+
+
+def test_dsp_preset_ref_null_or_string_ok():
+    # G3 P5: null and string are both legal; "" (means none) is legal too.
+    data = _load("project_dspchain_v2.json")
+    node = data["signalGraph"]["nodes"][0]
+    node["dspPresetRef"] = None
+    assert validate_project(data) == []
+    data["signalGraph"]["nodes"][0]["dspPresetRef"] = ""
+    assert validate_project(data) == []
