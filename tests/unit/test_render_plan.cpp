@@ -8,17 +8,16 @@
 //     which is the whole point of the preallocated pool.
 #include <gtest/gtest.h>
 
+#include "alloc_counter.hpp"
 #include "dsp_internal.hpp"
 #include "graph_internal.hpp"
 #include "render_plan.hpp"
 
 #include <algorithm>
-#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
 #include <fstream>
-#include <new>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -26,30 +25,6 @@
 #ifndef RENDER_PLAN_SRC
 #define RENDER_PLAN_SRC ""
 #endif
-
-// ---------------------------------------------------------------------------
-// Global allocation counter — replaced operator new/delete count every heap
-// allocation in the test binary. We snapshot around the execute call only
-// (gtest's own EXPECT machinery allocates, so no EXPECT inside the measured
-// region).
-// ---------------------------------------------------------------------------
-namespace {
-std::atomic<long> g_alloc_calls{0};
-
-void* count_alloc(std::size_t n) {
-  g_alloc_calls.fetch_add(1, std::memory_order_relaxed);
-  void* p = std::malloc(n);
-  if (!p) throw std::bad_alloc();
-  return p;
-}
-}  // namespace
-
-void* operator new(std::size_t n) { return count_alloc(n); }
-void* operator new[](std::size_t n) { return count_alloc(n); }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete[](void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 
 namespace {
 
@@ -287,19 +262,19 @@ TEST(RenderPlan, ExecutePathAllocatesNothing) {
   sfcore::dsp::AudioBlock warm = sine_block(512);
   ASSERT_TRUE(sfcore::dsp::render_chain_planned(plan, warm, err)) << err;
 
-  const long before = g_alloc_calls.load(std::memory_order_relaxed);
+  const long before = sftest::alloc_calls();
   for (int k = 0; k < 64; ++k) {
     sfcore::dsp::AudioBlock b = sine_block(512);  // allocated BEFORE the region
     // (sine_block itself allocates nothing; AudioBlock is stack/POD)
-    const long mid = g_alloc_calls.load(std::memory_order_relaxed);
+    const long mid = sftest::alloc_calls();
     const bool ok = sfcore::dsp::render_chain_planned(plan, b, err);
-    const long after = g_alloc_calls.load(std::memory_order_relaxed);
+    const long after = sftest::alloc_calls();
     if (!ok || after != mid) {
       ADD_FAILURE() << "execute allocated: mid=" << mid << " after=" << after;
       break;
     }
   }
-  const long total = g_alloc_calls.load(std::memory_order_relaxed) - before;
+  const long total = sftest::alloc_calls() - before;
   EXPECT_EQ(total, 0L) << "render_chain_planned made " << total
                        << " heap allocations across 64 executions";
 }

@@ -4,6 +4,7 @@ set(FIXTURES_DIR ${CMAKE_SOURCE_DIR}/../tests/fixtures)
 set(SCHEMA_DIR ${CMAKE_SOURCE_DIR}/data/schemas)
 
 add_executable(sf_unit_tests
+    alloc_counter.cpp
     test_version.cpp
     test_project_create.cpp
     test_project_serialize.cpp
@@ -24,6 +25,7 @@ add_executable(sf_unit_tests
     test_dsp_kernels.cpp
     test_dsp_render.cpp
     test_render_plan.cpp
+    test_true_peak.cpp
 )
 
 target_include_directories(sf_unit_tests PRIVATE
@@ -32,17 +34,20 @@ target_include_directories(sf_unit_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core
     ${CMAKE_SOURCE_DIR}/src/graph
     ${CMAKE_SOURCE_DIR}/src/dsp
+    ${CMAKE_SOURCE_DIR}/src/measurement
 )
 
 target_compile_definitions(sf_unit_tests PRIVATE
     FIXTURES_DIR="${FIXTURES_DIR}"
     SCHEMA_DIR="${SCHEMA_DIR}"
     RENDER_PLAN_SRC="${CMAKE_SOURCE_DIR}/src/graph/render_plan.cpp"
+    TRUE_PEAK_SRC="${CMAKE_SOURCE_DIR}/src/measurement/true_peak.cpp"
 )
 
 target_link_libraries(sf_unit_tests PRIVATE
     sfcore
     sfdsp
+    sfmeasure
     gtest_main
     stdc++fs
 )
