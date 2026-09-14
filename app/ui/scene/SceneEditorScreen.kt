@@ -3,6 +3,11 @@
 // ProjectViewModel helpers (all on the shared IO dispatcher); the form re-seeds
 // from the committed document on entry, and the native error message arrives
 // via the [errorMessage] state slot on failed commits.
+// G3 §6 P6: a distinct "Scene name" field renames the scene OBJECT
+// (sf_scene_rename via ProjectViewModel.sceneRename), while the existing
+// "Scene/project name" field keeps renaming the PROJECT (unchanged behavior).
+// The new field is a DirtyField: its commit button enables only while the
+// field is dirty and re-seeds never clobber an in-progress edit (D7).
 package id.soundforge.pastudio.scene
 
 import androidx.compose.foundation.layout.Arrangement
@@ -31,12 +36,15 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.keyboard.KeyboardType
 import androidx.compose.ui.unit.dp
+import id.soundforge.pastudio.common.DirtyField
 import id.soundforge.pastudio.venue.VenueKt
 
 /** Numeric-decimal TextField; the engine validates finite, >0 dimensions. */
@@ -80,10 +88,16 @@ fun SceneEditorScreen(
     scene: SceneKt? = null,
     venue: VenueKt? = null,
     projectName: String = "",
+    /** Committed scene-object name (UiState.Ready.scene.name); seeds the
+     *  G3 "Scene name" DirtyField and never clobbers a dirty edit. */
+    sceneName: String = "",
     errorMessage: String? = null,
     onEditVenue: (String?) -> Unit = {},
     onNavigateBack: () -> Unit = {},
     onRenameScene: (String) -> Unit = {},
+    /** G3: renames the scene OBJECT via ProjectViewModel.sceneRename
+     *  (sf_scene_rename) — distinct from [onRenameScene] (project rename). */
+    onRenameSceneName: (String) -> Unit = {},
     onUpdateGeometry: (Pt3, Pt3) -> Unit = {},
 ) {
     if (projectId == null) {
@@ -99,7 +113,7 @@ fun SceneEditorScreen(
     }
 
     // --- Editable fields (seeded per document refresh) ---------------------
-    var sceneName by remember { mutableStateOf("") }
+    var projectNameField by remember { mutableStateOf("") }
     var cx by remember { mutableStateOf("") }
     var cy by remember { mutableStateOf("") }
     var cz by remember { mutableStateOf("") }
@@ -109,8 +123,13 @@ fun SceneEditorScreen(
     var errorText by remember { mutableStateOf<String?>(null) }
     var venueExpanded by remember { mutableStateOf(false) }
 
+    // G3 P6: scene object name, DirtyField-tracked (seed/commit/isDirty).
+    val sceneNameField = remember { DirtyField(sceneName) }
+    // Re-seed from the committed document — only while pristine.
+    LaunchedEffect(sceneName) { sceneNameField.seed(sceneName) }
+
     LaunchedEffect(scene, projectName) {
-        sceneName = projectName.ifEmpty { scene?.name ?: "" }
+        projectNameField = projectName.ifEmpty { scene?.name ?: "" }
         val c = scene?.center ?: Pt3(0.0, 0.0, 0.0)
         val l = scene?.listening ?: Pt3(0.0, 0.0, 0.0)
         cx = fmt(c.x); cy = fmt(c.y); cz = fmt(c.z)
@@ -136,10 +155,18 @@ fun SceneEditorScreen(
     }
 
     fun commitName() {
-        val name = sceneName.trim()
+        val name = projectNameField.trim()
         if (name.isEmpty() || name == projectName) return
         errorText = null
         onRenameScene(name)
+    }
+
+    fun commitSceneName() {
+        val name = sceneNameField.value.trim()
+        if (name.isEmpty()) return
+        errorText = null
+        onRenameSceneName(name)
+        sceneNameField.commit()
     }
 
     Scaffold(
@@ -168,10 +195,26 @@ fun SceneEditorScreen(
                 return@Column
             }
 
-            // Edits the PROJECT name (single-name model PLAN_G1 §6.2).
+            // G3 P6: the scene OBJECT's own name — renames doc.scene.name via
+            // sf_scene_rename. Commit button gated on DirtyField.isDirty.
             OutlinedTextField(
-                value = sceneName,
-                onValueChange = { sceneName = it },
+                value = sceneNameField.value,
+                onValueChange = { sceneNameField.edit(it) },
+                singleLine = true,
+                label = { Text(text = "Scene name") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            TextButton(
+                onClick = { commitSceneName() },
+                enabled = sceneNameField.isDirty,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(text = "Apply scene name") }
+
+            // Edits the PROJECT name (single-name model PLAN_G1 §6.2) — G1
+            // behavior, label and commit path preserved unchanged.
+            OutlinedTextField(
+                value = projectNameField,
+                onValueChange = { projectNameField = it },
                 singleLine = true,
                 label = { Text(text = "Scene/project name") },
                 modifier = Modifier.fillMaxWidth(),

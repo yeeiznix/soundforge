@@ -13,6 +13,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import id.soundforge.pastudio.dsp.DspChainScreen
+import id.soundforge.pastudio.dsp.DspChainViewModel
 import id.soundforge.pastudio.home.HomeScreen
 import id.soundforge.pastudio.measurement.MeasurementScreen
 import id.soundforge.pastudio.mixer.MixerScreen
@@ -45,11 +46,13 @@ fun SoundForgeNavGraph(navController: NavHostController = rememberNavController(
     // (bind is idempotent, so repeat Ready refreshes are safe).
     val signalGraphViewModel: SignalGraphViewModel = viewModel()
     val mixerViewModel: MixerViewModel = viewModel()
+    val dspChainViewModel: DspChainViewModel = viewModel()
     val readyState = uiState as? UiState.Ready
     LaunchedEffect(readyState) {
         if (readyState != null) {
             signalGraphViewModel.bind(projectViewModel)
             mixerViewModel.bind(projectViewModel)
+            dspChainViewModel.bind(projectViewModel)
         }
     }
 
@@ -81,12 +84,14 @@ fun SoundForgeNavGraph(navController: NavHostController = rememberNavController(
                 scene = (uiState as? UiState.Ready)?.scene,
                 venue = (uiState as? UiState.Ready)?.venue,
                 projectName = (uiState as? UiState.Ready)?.meta?.name ?: "",
+                sceneName = (uiState as? UiState.Ready)?.scene?.name ?: "",
                 errorMessage = (uiState as? UiState.Error)?.message,
                 onEditVenue = { id ->
                     navController.navigate("${Route.Venue.path}?projectId=${id.orEmpty()}")
                 },
                 onNavigateBack = { navController.popBackStack() },
                 onRenameScene = { projectViewModel.renameProject(it) },
+                onRenameSceneName = { projectViewModel.sceneRename(it) },
                 onUpdateGeometry = { center, listening ->
                     projectViewModel.updateSceneGeometry(center, listening)
                 },
@@ -148,7 +153,15 @@ fun SoundForgeNavGraph(navController: NavHostController = rememberNavController(
             route = Route.Dsp.path + "?projectId={projectId}",
             arguments = listOf(projectIdArgument()),
         ) { entry ->
-            DspChainScreen(projectId = entry.arguments?.getString("projectId"))
+            DspChainScreen(
+                projectId = entry.arguments?.getString("projectId"),
+                signalGraph = (uiState as? UiState.Ready)?.signalGraph,
+                dspPresets = (uiState as? UiState.Ready)?.dspPresets,
+                errorMessage = (uiState as? UiState.Error)?.message,
+                readLastEditError = { projectViewModel.lastEditError },
+                onSetPreset = { nodeId, presetId -> dspChainViewModel.setPreset(nodeId, presetId) },
+                onNavigateBack = { navController.popBackStack() },
+            )
         }
 
         composable(

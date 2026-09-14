@@ -5,7 +5,7 @@
 //
 // JNI_OnLoad (native side) installs a logcat log sink via sf_set_log_sink, so
 // every sf_log line appears under "SF/<tag>" with no Java-side callback.
-// 25 external funs below (16 G0/G1 + 9 G2 graph) — their symbols use the full
+// 26 external funs below (17 G0/G1/G3 + 9 G2 graph) — their symbols use the full
 // JNI prefix Java_id_soundforge_pastudio_platform_bridge_NativeBridge_<name>.
 //
 // G0: synchronous calls; G2 introduces SfCommandQueue for audio-thread safety.
@@ -26,6 +26,9 @@ object NativeBridge {
     // map `!= SF_OK` to lastError(handle) read on the same thread.
     external fun renameProject(handle: Long, newName: String): Int
     external fun renameVenue(handle: Long, newName: String): Int
+    // G3 scene-name edit (docs/PLAN_G3.md §4.5): renames the scene object, NOT
+    // the project — sf_scene_rename reuses the scene.update audit action.
+    external fun sceneRename(handle: Long, newName: String): Int
     external fun setVenueDimensions(handle: Long, w: Double, d: Double, h: Double): Int
     external fun setSceneGeometry(handle: Long, cx: Double, cy: Double, cz: Double,
                                   lx: Double, ly: Double, lz: Double): Int

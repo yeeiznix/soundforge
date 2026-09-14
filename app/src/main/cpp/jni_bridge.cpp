@@ -12,6 +12,8 @@
 // graphRemoveNode, graphAddEdge, graphRemoveEdge, graphSetMixer,
 // graphSetPreset, graphValidate, graphTopologicalOrder, graphEvaluateMixer) —
 // one per NativeBridge external fun (PLAN_G2 §4.6).
+// G3: 26 exported functions (25 + sceneRename -> sf_scene_rename, PLAN_G3 §4.5)
+// — one per NativeBridge external fun.
 #include <jni.h>
 #include <android/log.h>
 
@@ -158,6 +160,22 @@ Java_id_soundforge_pastudio_platform_bridge_NativeBridge_renameVenue(JNIEnv* env
     return SF_E_INVALID_ARG;
   } catch (...) {
     log_boundary_exception(env, "renameVenue", "unknown");
+    return SF_E_INVALID_ARG;
+  }
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_id_soundforge_pastudio_platform_bridge_NativeBridge_sceneRename(JNIEnv* env, jobject /*thiz*/,
+                                                                     jlong handle, jstring new_name) {
+  try {
+    // Mirrors renameVenue/renameProject; sf_scene_rename touches scene.name
+    // only (PLAN_G3 §4.5 freeze invariant).
+    return static_cast<jint>(sf_scene_rename(to_handle(handle), to_std(env, new_name).c_str()));
+  } catch (const std::exception& e) {
+    log_boundary_exception(env, "sceneRename", e.what());
+    return SF_E_INVALID_ARG;
+  } catch (...) {
+    log_boundary_exception(env, "sceneRename", "unknown");
     return SF_E_INVALID_ARG;
   }
 }

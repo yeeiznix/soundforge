@@ -24,6 +24,8 @@ import kotlinx.coroutines.sync.withLock
 import id.soundforge.pastudio.scene.Pt3
 import id.soundforge.pastudio.scene.SceneKt
 import id.soundforge.pastudio.scene.projectSceneOf
+import id.soundforge.pastudio.dsp.DspPresetKt
+import id.soundforge.pastudio.dsp.projectDspPresetsOf
 import id.soundforge.pastudio.signal.SignalGraphKt
 import id.soundforge.pastudio.signal.projectSignalGraphOf
 import id.soundforge.pastudio.venue.VenueKt
@@ -43,6 +45,8 @@ sealed interface UiState {
         val scene: SceneKt? = null,
         val venue: VenueKt? = null,
         val signalGraph: SignalGraphKt? = null,
+        /** Existing dspPresets envelopes (attach/replace/clear targets, §6 P6). */
+        val dspPresets: List<DspPresetKt> = emptyList(),
     ) : UiState
 
     /** The last create/open/save attempt failed; no usable handle. */
@@ -193,6 +197,28 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    /** Field-level scene rename (PLAN_G3 §4.5/§6 P6): renames doc.scene.name
+     *  only — project.name is untouched (freeze invariant). Mirrors
+     *  [renameProject]: failure keeps the handle valid and surfaces the native
+     *  error via [lastEditError] + a UiState.Error rollback. */
+    fun sceneRename(name: String) {
+        lastEditError = null
+        viewModelScope.launch(Dispatchers.IO) {
+            nativeMutex.withLock {
+                if (handle == 0L) {
+                    lastEditError = "No project is open"
+                    return@launch
+                }
+                if (NativeBridge.sceneRename(handle, name) != SF_OK) {
+                    lastEditError = NativeBridge.lastError(handle)
+                    _state.value = UiState.Error(lastEditError ?: "Scene rename failed")
+                    return@launch
+                }
+                _state.value = readyState(handle, fallbackName = currentName())
+            }
+        }
+    }
+
     /** Re-parse the committed document into [UiState.Ready] without touching
      *  the handle (committed-doc-is-truth). Called by the G2 graph ViewModels
      *  after a successful sf_graph_* commit — call OUTSIDE a nativeMutex
@@ -253,6 +279,7 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
                             scene = previous?.scene,
                             venue = previous?.venue,
                             signalGraph = previous?.signalGraph,
+                            dspPresets = previous?.dspPresets ?: emptyList(),
                         )
                     }
                     .onFailure { error ->
@@ -306,6 +333,7 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
             scene = root?.let { projectSceneOf(it) },
             venue = root?.let { projectVenueOf(it) },
             signalGraph = root?.let { projectSignalGraphOf(it) },
+            dspPresets = root?.let { projectDspPresetsOf(it) } ?: emptyList(),
         )
     }
 
