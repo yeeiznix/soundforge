@@ -15,6 +15,7 @@
 #include <nlohmann/json.hpp>
 
 #include "soundforge/sf_command_queue.h"
+#include "soundforge/sf_queue_runner.h"
 #include "soundforge/sf_types.h"
 #include "soundforge/sf_version.h"
 
@@ -188,6 +189,14 @@ struct SfProject {
   // D3-amd SEC-G3-1/-G3-3). Only the runner thread's epilogue ever writes
   // STOPPED (after its last batch, before thread exit).
   std::atomic<int32_t> runnerState{static_cast<int32_t>(SfRunnerIdle)};
+  // G4 P4 (internal claim slot; no public ABI, no new export/SF_E_*): the
+  // single audio engine bound to this handle, or nullptr. sf_audio_engine_create
+  // claims it with CAS(nullptr -> e) and rolls back on failure — this is the
+  // REAL single-engine guard (review R-D): sf_queue_runner_create only CHECKS
+  // runnerState == IDLE and does not reserve it, so two engines could otherwise
+  // both pass create. void* keeps this header independent of the (P4) audio
+  // module. The clone ctor does not copy it (see below).
+  std::atomic<void*> audioEngine{nullptr};
 
   SfProject() = default;
   // ORC-1 (D3-amd): explicit copy ctor — sf_project_clone copies doc +
@@ -510,6 +519,35 @@ inline bool runner_busy_reader(const SfProject* p, const char* tag) {
 // *err_out into the caller's err_buf AND the handle error store.
 sf_result_t apply_batch_impl(sf_project_t* p, const sf_cmd_t* cmds, size_t n,
                              size_t* applied, std::string* err_out);
+
+// ---------------------------------------------------------------------------
+// G4 P3 — runner publish observer (PLAN_G4 §4.1 D1). Internal C++ only: no
+// public header, no export, no JNI, no schema/ABI change.
+//
+// The queue-runner thread is the project's mutation owner, so after each drain
+// pass that applied >=1 mutation it may safely read proj->doc.signalGraph and
+// hand a fresh RenderPlan to the observer. The observer belongs to the audio
+// engine (P4), which owns the PlanSnapshotStore and knows its out_node_id; the
+// runner just fires it.
+// ---------------------------------------------------------------------------
+class PlanSnapshotStore;  // snapshot.hpp (kept out of this header)
+
+// Fired on the runner thread with the graph it just mutated. Implementations
+// MUST be noexcept in effect: the snapshot store's publish() already contains
+// compile throws (ORC-G4-03), and the runner additionally fences this call so
+// nothing can escape the runner thread. A null `publish` means "no observer".
+struct RunnerObserver {
+  void* user = nullptr;  // opaque engine instance; never dereferenced here
+  void (*publish)(void* user, const SignalGraphDoc& graph) = nullptr;
+};
+
+// Attaches (obs != NULL) or detaches (obs == NULL) the runner's observer.
+// Caller-lifetime contract, enforced by the P4 engine's destroy ordering:
+// attach BEFORE sf_queue_runner_start; detach AFTER sf_queue_runner_join (so no
+// publish can be in flight when the engine/store is freed). The observer is
+// copied by value into the runner. Defined in command_queue_thread.cpp.
+void sf_queue_runner_set_observer(sf_queue_runner_t* r,
+                                  const RunnerObserver* obs);
 
 // ---------------------------------------------------------------------------
 // ABI exception guard

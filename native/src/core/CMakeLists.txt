@@ -12,6 +12,7 @@ set(SFCORE_SOURCES
     project.cpp
     command_queue.cpp
     command_queue_thread.cpp
+    snapshot.cpp
     ../graph/graph_abi.cpp
 )
 
@@ -21,7 +22,10 @@ add_library(sfcore STATIC ${SFCORE_SOURCES})
 # foreach). Forward target references resolve at generate time; the explicit
 # include dir is belt-and-suspenders so `#include "graph_internal.hpp"`
 # resolves from core sources regardless of link ordering.
+# snapshot.cpp compiles RenderPlan values, so it also needs the dsp headers
+# (render_plan.hpp -> dsp_internal.hpp).
 target_include_directories(sfcore PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../graph)
+target_include_directories(sfcore PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../dsp)
 target_link_libraries(sfcore PRIVATE sfgraph)
 
 # graph_abi.cpp lives in src/graph/ but is compiled into sfcore (it needs

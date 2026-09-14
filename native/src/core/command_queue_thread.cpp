@@ -109,6 +109,11 @@ struct sf_queue_runner_s {
   mutable std::mutex report_mu;
   std::string report;                      // latest EVALUATE_MIXER dump
   bool has_report = false;
+  // G4 P3 — publish observer (PLAN_G4 §4.1 D1). Copied by value at attach
+  // time (before start) and only read on the runner thread; detach (set to a
+  // null observer) happens after join, so no publish can be in flight while
+  // the engine/store is torn down. A null publish means "no observer".
+  RunnerObserver observer;
 };
 
 namespace {
@@ -161,6 +166,22 @@ void run_loop(sf_queue_runner_s* self) {
                  ("apply_batch stopped at " + std::to_string(applied) + "/" +
                   std::to_string(n) + ": " + err)
                      .c_str());
+      }
+      // G4 P3 — publish AFTER a batch that applied >=1 mutation (PLAN_G4 §4.1
+      // D1). The runner owns the document here, so reading signalGraph is safe.
+      // An empty drain (n == 0), SF_CMD_STOP and cmd 7 never reach this point
+      // (STOP/EVALUATE are intercepted above and an empty drain skips the
+      // block). The observer is fenced so nothing escapes the runner thread:
+      // the store's publish() already contains compile throws (ORC-G4-03).
+      if (applied > 0 && self->observer.publish != nullptr) {
+        try {
+          self->observer.publish(self->observer.user, self->proj->doc.signalGraph);
+        } catch (const std::exception& e) {
+          log_line(SF_LOG_ERROR, "runner",
+                   (std::string("observer publish failed: ") + e.what()).c_str());
+        } catch (...) {
+          log_line(SF_LOG_ERROR, "runner", "observer publish failed: unknown");
+        }
       }
     } else if (fetched == 0 && !stop_requested) {
       // Idle poll: no busy spin (plan §4.3).
@@ -303,3 +324,18 @@ sf_result_t sf_queue_runner_destroy(sf_queue_runner_t* r) {
 }
 
 }  // extern "C"
+
+// G4 P3 — attach/detach the runner's publish observer (internal C++, declared
+// in sf_internal.hpp; NOT an exported symbol). `r` NULL is a safe no-op.
+void sfcore::sf_queue_runner_set_observer(sf_queue_runner_t* r,
+                                          const RunnerObserver* obs) {
+  if (!r) return;
+  // Per the attach contract this is called BEFORE start (attach) or AFTER join
+  // (detach), so it never races the runner thread's read of `observer`.
+  if (obs) {
+    r->observer = *obs;
+  } else {
+    r->observer = RunnerObserver{};
+  }
+}
+

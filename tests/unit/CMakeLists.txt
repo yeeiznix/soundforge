@@ -26,6 +26,7 @@ add_executable(sf_unit_tests
     test_dsp_render.cpp
     test_render_plan.cpp
     test_true_peak.cpp
+    test_snapshot.cpp
 )
 
 target_include_directories(sf_unit_tests PRIVATE
