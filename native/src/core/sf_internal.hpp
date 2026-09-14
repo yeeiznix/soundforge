@@ -411,6 +411,41 @@ inline void set_handle_error(SfProject* p, const std::string& msg) {
 }
 
 // ---------------------------------------------------------------------------
+// G3 P4b single-owner ABI boundary guards (PLAN_G3 §6 P4b; D3-amd SEC-G3-2/
+// -G3-3/-G3-4 + oracle R-B(c) "reject, not contract").
+//
+// Every exported sf_* entry that touches `doc` takes exactly ONE acquire load
+// of runnerState and, while the runner thread is alive (RUNNING/STOPPING),
+// rejects: mutators report on the HANDLE error store (the existing per-entry
+// pattern) and return SF_E_IO; reads report on the thread-local store and
+// return SF_E_IO (or a safe empty value for the `const char*` getters). This
+// is the same one-load/no-TOCTOU shape P4a used for sf_graph_apply_batch.
+// Exactly two exemptions: sf_last_error (the runner NEVER writes lastError —
+// SEC-G3-4) and sf_project_destroy (void-signature rule, SEC-G3-2).
+constexpr const char* kRunnerBusyMsg = "project.busy: queue runner active";
+
+// True while the runner thread is or may still be alive for this handle.
+inline bool runner_alive(const SfProject* p) {
+  return runner_thread_alive(p->runnerState.load(std::memory_order_acquire));
+}
+
+// Mutator guard — returns true when the call was rejected (handle error set).
+inline bool runner_busy_mutator(SfProject* p, const char* tag) {
+  if (!runner_alive(p)) return false;
+  log_line(SF_LOG_WARN, tag, "busy: queue runner active");
+  set_handle_error(p, kRunnerBusyMsg);
+  return true;
+}
+
+// Read guard — returns true when the call was rejected (thread-local error set).
+inline bool runner_busy_reader(const SfProject* p, const char* tag) {
+  if (!runner_alive(p)) return false;
+  log_line(SF_LOG_WARN, tag, "busy: queue runner active");
+  set_last_error(kRunnerBusyMsg);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // Command queue drain (command_queue.cpp / command_queue_thread.cpp)
 // ---------------------------------------------------------------------------
 // Internal apply entry — the G2 sf_graph_apply_batch loop WITHOUT any

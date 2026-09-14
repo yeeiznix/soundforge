@@ -19,7 +19,13 @@
 //             first so std::thread's destructor never aborts.
 //
 // The runner NEVER writes proj->lastError (SEC-G3-4); after stop+join the
-// handle is caller-owned again (C8) and sync use is allowed. The runner handle
+// handle is caller-owned again (C8) and sync use is allowed. While the runner
+// is RUNNING/STOPPING the ABI boundary enforces single-owner (PLAN_G3 §6 P4b):
+// every doc-touching sf_* mutator AND read rejects with SF_E_IO
+// "project.busy: queue runner active" (reads report on the thread-local error
+// store; getters return their safe empty value). The only exceptions are
+// sf_last_error and sf_project_destroy (own void-safe rule below). Running any
+// such call against an active runner is a contract violation (C7). The runner handle
 // must not outlive its queue OR its project handle, and vice versa: the project
 // handle must not be destroyed while a runner is attached (SEC-G3-2). The
 // lifecycle is one-shot: START accepts IDLE only, so nothing resets STOPPED

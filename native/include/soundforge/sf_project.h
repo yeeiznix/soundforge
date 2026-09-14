@@ -29,6 +29,11 @@ int32_t     sf_is_compatible(int32_t schema_version);
 
 /* --- Lifecycle --- */
 sf_project_t* sf_project_create(const char* name, const char* author); /* author may be NULL */
+/* G3 P4b (SEC-G3-2): void-safe. While a queue runner is RUNNING/STOPPING the
+ * handle is NOT freed; the call sets the handle error to
+ * "project.destroy: queue runner active" (observe via sf_last_error(p)) and
+ * logs ERROR. The caller must sf_queue_runner_stop + join, then destroy again
+ * (a second destroy is mandatory). In IDLE / STOPPED(joined) it frees. */
 void          sf_project_destroy(sf_project_t* p);
 sf_result_t   sf_project_clone(const sf_project_t* src, sf_project_t** out);
 

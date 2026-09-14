@@ -19,6 +19,8 @@ sf_result_t sf_graph_add_node(sf_project_t* p, int32_t kind, const char* name, c
   }
   try {
     auto* proj = reinterpret_cast<sfcore::SfProject*>(p);
+    // P4b single-owner guard: FIRST, before any doc-touching work (SEC-G3-4).
+    if (runner_busy_mutator(proj, "graph")) return SF_E_IO;
     std::string id = sfcore::uuid_generate();
     std::string err;
     sf_result_t rc = add_node_impl(proj->doc.signalGraph, kind, name, id, err);
@@ -40,6 +42,7 @@ sf_result_t sf_graph_remove_node(sf_project_t* p, const char* node_id) {
   }
   try {
     auto* proj = reinterpret_cast<sfcore::SfProject*>(p);
+    if (runner_busy_mutator(proj, "graph")) return SF_E_IO;  // P4b single-owner
     std::string err;
     int edges_removed = 0;
     sf_result_t rc = remove_node_impl(proj->doc.signalGraph, node_id, err, edges_removed);
@@ -61,6 +64,7 @@ sf_result_t sf_graph_add_edge(sf_project_t* p, const char* from_id, const char* 
   }
   try {
     auto* proj = reinterpret_cast<sfcore::SfProject*>(p);
+    if (runner_busy_mutator(proj, "graph")) return SF_E_IO;  // P4b single-owner
     if (from_port < 0 || to_port < 0) {
       sfcore::set_handle_error(proj, "graph.addEdge: port must be >= 0");
       return SF_E_INVALID_ARG;
@@ -86,6 +90,7 @@ sf_result_t sf_graph_remove_edge(sf_project_t* p, const char* edge_id) {
   }
   try {
     auto* proj = reinterpret_cast<sfcore::SfProject*>(p);
+    if (runner_busy_mutator(proj, "graph")) return SF_E_IO;  // P4b single-owner
     std::string err;
     sf_result_t rc = remove_edge_impl(proj->doc.signalGraph, edge_id, err);
     if (rc != SF_OK) {
@@ -105,6 +110,7 @@ sf_result_t sf_graph_set_mixer(sf_project_t* p, const char* node_id,
   }
   try {
     auto* proj = reinterpret_cast<sfcore::SfProject*>(p);
+    if (runner_busy_mutator(proj, "graph")) return SF_E_IO;  // P4b single-owner
     std::string err;
     sf_result_t rc = set_mixer_impl(proj->doc.signalGraph, node_id, gain_db, pan,
                                     mute != 0, solo != 0, err);
@@ -126,6 +132,7 @@ sf_result_t sf_graph_set_preset(sf_project_t* p, const char* node_id, const char
   }
   try {
     auto* proj = reinterpret_cast<sfcore::SfProject*>(p);
+    if (runner_busy_mutator(proj, "graph")) return SF_E_IO;  // P4b single-owner
     std::string preset = (preset_id && *preset_id) ? std::string(preset_id) : "";
     // Validate preset exists in dspPresets if non-empty
     if (!preset.empty()) {
@@ -175,6 +182,9 @@ sf_result_t sf_graph_validate(sf_project_t* p, char* report_buf, size_t report_c
   }
   try {
     auto* proj = reinterpret_cast<sfcore::SfProject*>(p);
+    // P4b read guard (R-B(c)): reject, not contract — never read doc while the
+    // runner owns the mutation thread.
+    if (runner_busy_reader(proj, "graph")) return SF_E_IO;
     const auto& g = proj->doc.signalGraph;
     sfcore::json report = sfcore::json::object();
     std::vector<std::string> errors, warnings;
@@ -262,6 +272,7 @@ sf_result_t sf_graph_topological_order(sf_project_t* p, char** out_json, size_t*
   }
   try {
     auto* proj = reinterpret_cast<sfcore::SfProject*>(p);
+    if (runner_busy_reader(proj, "graph")) return SF_E_IO;  // P4b read guard
     std::vector<std::string> order;
     std::string err;
     if (!sfcore::topological_order(proj->doc.signalGraph, order, err)) {
@@ -281,6 +292,7 @@ sf_result_t sf_graph_evaluate_mixer(sf_project_t* p, char** out_json, size_t* ou
   }
   try {
     auto* proj = reinterpret_cast<sfcore::SfProject*>(p);
+    if (runner_busy_reader(proj, "graph")) return SF_E_IO;  // P4b read guard
     // Cycle guard must run before evaluate_mixer trusts the DAG.
     std::vector<std::string> order;
     std::string topo_err;

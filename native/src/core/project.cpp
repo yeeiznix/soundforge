@@ -151,7 +151,18 @@ extern "C" sf_project_t* sf_project_create(const char* name, const char* author)
 }
 
 extern "C" void sf_project_destroy(sf_project_t* p) {
-  if (p) delete reinterpret_cast<sfcore::SfProject*>(p);
+  if (!p) return;
+  auto* proj = reinterpret_cast<sfcore::SfProject*>(p);
+  // P4b SEC-G3-2 (void-safe): while the runner thread is alive, freeing the
+  // handle would dangle the runner's `proj`/`state` pointers (ORC-P4a-A). The
+  // signature is additive-ABI `void`, so we set the handle error + log ERROR
+  // and SKIP the free; the caller must stop+join, then destroy again.
+  if (sfcore::runner_thread_alive(proj->runnerState.load(std::memory_order_acquire))) {
+    sfcore::log_line(SF_LOG_ERROR, "project", "destroy: queue runner active");
+    sfcore::set_handle_error(proj, "project.destroy: queue runner active");
+    return;
+  }
+  delete proj;
 }
 
 extern "C" sf_result_t sf_project_clone(const sf_project_t* src, sf_project_t** out) {
@@ -160,7 +171,11 @@ extern "C" sf_result_t sf_project_clone(const sf_project_t* src, sf_project_t** 
     return SF_E_INVALID_ARG;
   }
   try {
-    *out = reinterpret_cast<sf_project_t*>(new sfcore::SfProject(*reinterpret_cast<const sfcore::SfProject*>(src)));
+    const auto* sproj = reinterpret_cast<const sfcore::SfProject*>(src);
+    // P4b (ORC-1): clone is a read — reject while RUNNING/STOPPING. The copy
+    // ctor default-constructs runner state, so an IDLE clone is IDLE.
+    if (runner_busy_reader(sproj, "project")) return SF_E_IO;
+    *out = reinterpret_cast<sf_project_t*>(new sfcore::SfProject(*sproj));
     return SF_OK;
   } SF_CATCH_ERRORS()
 }
@@ -175,6 +190,8 @@ extern "C" sf_result_t sf_project_to_json(const sf_project_t* p, char** out_json
   }
   try {
     const auto* proj = reinterpret_cast<const sfcore::SfProject*>(p);
+    // P4b read guard (R-B(c)): reject while the runner owns the thread.
+    if (runner_busy_reader(proj, "project")) return SF_E_IO;
     // error_handler_t::replace (G3 ORC-P1-1/2): accepted names may contain
     // malformed UTF-8 (utf8_char_count is fail-open); emit U+FFFD instead of
     // throwing, so serialization can never brick the document.
@@ -255,6 +272,8 @@ extern "C" sf_result_t sf_project_save_to_path(const sf_project_t* p, const char
   }
   try {
     auto* proj = const_cast<sfcore::SfProject*>(reinterpret_cast<const sfcore::SfProject*>(p));
+    // P4b: save writes audit + modifiedAt (D3-amd) -> a MUTATOR; guard FIRST.
+    if (runner_busy_mutator(proj, "project")) return SF_E_IO;
     const std::string now = sfcore::now_iso8601();
     proj->doc.auditLog.push_back({
         now,
@@ -346,24 +365,35 @@ extern "C" sf_result_t sf_project_open_from_path(const char* path, sf_project_t*
 // ---------------------------------------------------------------------------
 // C ABI: Accessors
 // ---------------------------------------------------------------------------
+// P4b read guard on the getters (R-B(c)): these have no result channel, so a
+// rejected read yields the same safe empty value a NULL handle yields and the
+// thread-local error store carries "project.busy: queue runner active".
 extern "C" const char* sf_project_get_name(const sf_project_t* p) {
   if (!p) return "";
-  return reinterpret_cast<const sfcore::SfProject*>(p)->doc.project.name.c_str();
+  const auto* proj = reinterpret_cast<const sfcore::SfProject*>(p);
+  if (runner_busy_reader(proj, "project")) return "";
+  return proj->doc.project.name.c_str();
 }
 
 extern "C" const char* sf_project_get_id(const sf_project_t* p) {
   if (!p) return "";
-  return reinterpret_cast<const sfcore::SfProject*>(p)->doc.project.id.c_str();
+  const auto* proj = reinterpret_cast<const sfcore::SfProject*>(p);
+  if (runner_busy_reader(proj, "project")) return "";
+  return proj->doc.project.id.c_str();
 }
 
 extern "C" int32_t sf_project_get_schema_version(const sf_project_t* p) {
   if (!p) return -1;
-  return reinterpret_cast<const sfcore::SfProject*>(p)->doc.schemaVersion;
+  const auto* proj = reinterpret_cast<const sfcore::SfProject*>(p);
+  if (runner_busy_reader(proj, "project")) return -1;
+  return proj->doc.schemaVersion;
 }
 
 extern "C" const char* sf_project_get_engine_version(const sf_project_t* p) {
   if (!p) return "";
-  return reinterpret_cast<const sfcore::SfProject*>(p)->doc.engineVersion.c_str();
+  const auto* proj = reinterpret_cast<const sfcore::SfProject*>(p);
+  if (runner_busy_reader(proj, "project")) return "";
+  return proj->doc.engineVersion.c_str();
 }
 
 // ---------------------------------------------------------------------------
@@ -377,6 +407,8 @@ extern "C" sf_result_t sf_project_health_check(const sf_project_t* p, char* repo
   }
   try {
     const auto* proj = reinterpret_cast<const sfcore::SfProject*>(p);
+    // P4b read guard (R-B(c)): reject while the runner owns the thread.
+    if (runner_busy_reader(proj, "project")) return SF_E_IO;
     const auto& doc = proj->doc;
     sfcore::json j = sfcore::doc_to_json(doc);
     sfcore::json report = sfcore::json::object();
@@ -517,6 +549,7 @@ extern "C" sf_result_t sf_project_rename(sf_project_t* p, const char* new_name) 
   }
   try {
     auto* proj = reinterpret_cast<sfcore::SfProject*>(p);
+    if (runner_busy_mutator(proj, "project")) return SF_E_IO;  // P4b single-owner
     if (!new_name || !*new_name) {
       sfcore::set_handle_error(proj, "rename: name must be non-empty");
       return SF_E_INVALID_ARG;
@@ -540,6 +573,7 @@ extern "C" sf_result_t sf_venue_rename(sf_project_t* p, const char* new_name) {
   }
   try {
     auto* proj = reinterpret_cast<sfcore::SfProject*>(p);
+    if (runner_busy_mutator(proj, "project")) return SF_E_IO;  // P4b single-owner
     if (!new_name || !*new_name) {
       sfcore::set_handle_error(proj, "venue.update: name must be non-empty");
       return SF_E_INVALID_ARG;
@@ -564,6 +598,7 @@ extern "C" sf_result_t sf_venue_set_dimensions(sf_project_t* p, double width_m,
   }
   try {
     auto* proj = reinterpret_cast<sfcore::SfProject*>(p);
+    if (runner_busy_mutator(proj, "project")) return SF_E_IO;  // P4b single-owner
     if (sf_geo_validate_box(width_m, depth_m, height_m) != SF_OK) {
       sfcore::set_handle_error(proj, "venue.update: dimensions must be finite and > 0");
       return SF_E_INVALID_ARG;
@@ -605,6 +640,7 @@ extern "C" sf_result_t sf_scene_set_geometry(sf_project_t* p, double cx, double 
   }
   try {
     auto* proj = reinterpret_cast<sfcore::SfProject*>(p);
+    if (runner_busy_mutator(proj, "project")) return SF_E_IO;  // P4b single-owner
     const double w = proj->doc.venue.widthM;
     const double d = proj->doc.venue.depthM;
     const double h = proj->doc.venue.heightM;
@@ -641,6 +677,7 @@ extern "C" sf_result_t sf_scene_rename(sf_project_t* p, const char* new_name) {
   }
   try {
     auto* proj = reinterpret_cast<sfcore::SfProject*>(p);
+    if (runner_busy_mutator(proj, "project")) return SF_E_IO;  // P4b single-owner
     if (!new_name || !*new_name) {
       sfcore::set_handle_error(proj, "scene.update: name must be non-empty");
       return SF_E_INVALID_ARG;
