@@ -23,6 +23,7 @@ add_executable(sf_unit_tests
     test_dsp_law.cpp
     test_dsp_kernels.cpp
     test_dsp_render.cpp
+    test_render_plan.cpp
 )
 
 target_include_directories(sf_unit_tests PRIVATE
@@ -36,6 +37,7 @@ target_include_directories(sf_unit_tests PRIVATE
 target_compile_definitions(sf_unit_tests PRIVATE
     FIXTURES_DIR="${FIXTURES_DIR}"
     SCHEMA_DIR="${SCHEMA_DIR}"
+    RENDER_PLAN_SRC="${CMAKE_SOURCE_DIR}/src/graph/render_plan.cpp"
 )
 
 target_link_libraries(sf_unit_tests PRIVATE

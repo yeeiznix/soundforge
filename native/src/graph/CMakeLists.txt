@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # G2 P2/P4: typed graph core + routing engine (STATIC library, pure helpers)
 # G3 P3: evaluate_mixer calls the sfcore::dsp mixing law (PLAN_G3 D1/D2);
 #        dsp_render.cpp = the chain-render harness, compiled INTO sfgraph (§4.2).
-add_library(sfgraph STATIC graph.cpp routing.cpp dsp_render.cpp)
+add_library(sfgraph STATIC graph.cpp routing.cpp dsp_render.cpp render_plan.cpp)
 
 # Match core's include style
 target_include_directories(sfgraph

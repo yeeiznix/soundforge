@@ -98,6 +98,9 @@ nlohmann::json evaluate_mixer(const SignalGraphDoc& g);
 // Unknown target id inside a non-empty graph -> silence (returns false with
 // err set); cycle -> false with err set. No allocation in the kernels; the
 // harness buffers are host-side only (G4 preallocates its pool).
+// G4 P1 (PLAN_G4 §4.4): re-expressed as compile_render_plan + the
+// zero-allocation render_chain_planned (see render_plan.hpp). Signature and
+// behavior unchanged.
 bool render_chain(const SignalGraphDoc& g, dsp::AudioBlock& block,
                   const std::string& out_node_id, std::string& err);
 
