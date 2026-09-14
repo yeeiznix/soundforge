@@ -117,18 +117,26 @@ int32_t sf_cmd_queue_depth(const sf_cmd_queue_t* q) {
                               self->head.load(std::memory_order_relaxed));
 }
 
+}  // extern "C"
+
 // ---------------------------------------------------------------------------
-// Drain + apply (C3): applies queued intent on the project's owner thread via
-// the same impl helpers as the synchronous mutators. Sequential; stops at the
-// first failing command and reports its error.
+// Drain + apply (C3): applies queued intent via the SAME impl helpers as the
+// synchronous mutators. Sequential; stops at the first failing command and
+// reports its error.
+//
+// SEC-G3-1 split: `apply_batch_impl` is the loop with NO ownership check and
+// NO handle-error write — the runner calls it directly on its own thread
+// (SEC-G3-4: the runner never writes proj->lastError). The public
+// `sf_graph_apply_batch` is the sanitized ABI entry: one acquire load of the
+// runner state (C7 busy-reject while a runner is active), otherwise forward
+// and mirror a failure into the handle error store + caller err_buf.
 // ---------------------------------------------------------------------------
-sf_result_t sf_graph_apply_batch(sf_project_t* p, const sf_cmd_t* cmds, size_t n,
-                                 size_t* applied, char* err_buf, size_t err_cap) {
+namespace sfcore {
+
+sf_result_t apply_batch_impl(sf_project_t* p, const sf_cmd_t* cmds, size_t n,
+                             size_t* applied, std::string* err_out) {
   if (applied) *applied = 0;
-  if (!p || !applied || (n > 0 && !cmds) || (err_cap > 0 && !err_buf)) {
-    set_handle_error(nullptr, "graph.applyBatch: null argument");
-    return SF_E_INVALID_ARG;
-  }
+  if (!p || !applied || (n > 0 && !cmds)) return SF_E_INVALID_ARG;
   try {
     auto* proj = reinterpret_cast<SfProject*>(p);
     size_t done = 0;
@@ -211,11 +219,7 @@ sf_result_t sf_graph_apply_batch(sf_project_t* p, const sf_cmd_t* cmds, size_t n
       }
       if (rc != SF_OK) {
         *applied = done;  // report progress: how many applied BEFORE the stop
-        set_handle_error(proj, err);  // sf_last_error(handle) sees the failure
-        if (err_cap > 0) {
-          std::strncpy(err_buf, err.c_str(), err_cap - 1);
-          err_buf[err_cap - 1] = '\0';
-        }
+        if (err_out) *err_out = err;
         return rc;
       }
       user_audit(proj, action.c_str(), obj, detail);  // per-cmd audit + modifiedAt
@@ -223,7 +227,48 @@ sf_result_t sf_graph_apply_batch(sf_project_t* p, const sf_cmd_t* cmds, size_t n
     }
     *applied = done;
     return SF_OK;
-  } SF_CATCH_ERRORS()
+  } catch (const std::exception& e) {
+    if (err_out) *err_out = e.what();
+    return SF_E_SCHEMA;
+  } catch (...) {
+    if (err_out) *err_out = "unknown native exception";
+    return SF_E_SCHEMA;
+  }
+}
+
+}  // namespace sfcore
+
+extern "C" {
+
+sf_result_t sf_graph_apply_batch(sf_project_t* p, const sf_cmd_t* cmds, size_t n,
+                                 size_t* applied, char* err_buf, size_t err_cap) {
+  if (applied) *applied = 0;
+  if (!p || !applied || (n > 0 && !cmds) || (err_cap > 0 && !err_buf)) {
+    set_handle_error(nullptr, "graph.applyBatch: null argument");
+    return SF_E_INVALID_ARG;
+  }
+  auto* proj = reinterpret_cast<SfProject*>(p);
+  if (runner_thread_alive(proj->runnerState.load(std::memory_order_acquire))) {
+    // C7 single-owner guard: reject, never block/wait (D3-amd SEC-G3-1).
+    // Every non-OK return explains itself via err_buf when one is offered.
+    log_line(SF_LOG_WARN, "graph", "busy: queue runner active");
+    set_handle_error(proj, "project.busy: queue runner active");
+    if (err_cap > 0) {
+      std::strncpy(err_buf, "project.busy: queue runner active", err_cap - 1);
+      err_buf[err_cap - 1] = '\0';
+    }
+    return SF_E_IO;
+  }
+  std::string err;
+  const sf_result_t rc = apply_batch_impl(p, cmds, n, applied, &err);
+  if (rc != SF_OK) {
+    set_handle_error(proj, err);  // sf_last_error(handle) sees the failure
+    if (err_cap > 0) {
+      std::strncpy(err_buf, err.c_str(), err_cap - 1);
+      err_buf[err_cap - 1] = '\0';
+    }
+  }
+  return rc;
 }
 
 }  // extern "C"

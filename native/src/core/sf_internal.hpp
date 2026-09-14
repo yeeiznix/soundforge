@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cstring>
 #include <map>
@@ -13,6 +14,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "soundforge/sf_command_queue.h"
 #include "soundforge/sf_types.h"
 #include "soundforge/sf_version.h"
 
@@ -159,9 +161,44 @@ struct SfProjectDoc {
 };
 
 // Opaque handle owned by the native heap; Kotlin holds it as jlong.
+//
+// G3 P4a (PLAN_G3 §4.3 D3-amd): the handle carries the queue-runner lifecycle
+// state as an atomic so any sync ABI entry can take ONE fast-path acquire load
+// to enforce the single-owner guard (contract C7/C8) and so the runner
+// thread's epilogue is the ONLY writer of RUNNING -> STOPPED (SEC-G3-3).
+enum SfRunnerState : int {
+  SfRunnerIdle = 0,     // no runner attached / never started or session undone
+  SfRunnerRunning = 1,  // start() CASed IDLE->RUNNING; runner thread is live
+  SfRunnerStopping = 2, // stop() CASed RUNNING->STOPPING; thread drains+exits
+  SfRunnerStopped = 3   // runner thread epilogue published; join may reap
+};
+
+// True while the runner thread is or may still be alive (guard gate: sync ABI
+// entries reject external access during the session; after STOPPED(joined)
+// the ownership is returned to the caller — C8).
+inline bool runner_thread_alive(int32_t st) {
+  return st == SfRunnerRunning || st == SfRunnerStopping;
+}
+
 struct SfProject {
   SfProjectDoc doc;
   std::string lastError = "no error";
+  // Queue-runner lifecycle (G3 P4a). Atomic so the ownership guard is a single
+  // load (no flag/state desync, no TOCTOU beyond the documented forward race —
+  // D3-amd SEC-G3-1/-G3-3). Only the runner thread's epilogue ever writes
+  // STOPPED (after its last batch, before thread exit).
+  std::atomic<int32_t> runnerState{static_cast<int32_t>(SfRunnerIdle)};
+
+  SfProject() = default;
+  // ORC-1 (D3-amd): explicit copy ctor — sf_project_clone copies doc +
+  // lastError but the runner lifecycle state defaults to IDLE: a clone never
+  // inherits a runner (clone rejects while RUNNING via the P4b read guard, so
+  // copying an active project is already fenced off by the ABI).
+  SfProject(const SfProject& o) : doc(o.doc), lastError(o.lastError) {}
+  // Assignment would copy an ACTIVE runner's state field onto another handle —
+  // forbid the shape at compile time rather than define surprising semantics.
+  SfProject& operator=(const SfProject&) = delete;
+  SfProject& operator=(SfProject&&) = delete;
 };
 
 // Shared audit helper — used by project.cpp mutators and graph_abi.cpp.
@@ -372,6 +409,25 @@ inline void set_handle_error(SfProject* p, const std::string& msg) {
   set_last_error(msg);
   if (p) p->lastError = msg;
 }
+
+// ---------------------------------------------------------------------------
+// Command queue drain (command_queue.cpp / command_queue_thread.cpp)
+// ---------------------------------------------------------------------------
+// Internal apply entry — the G2 sf_graph_apply_batch loop WITHOUT any
+// ownership/busy check (SEC-G3-1 split). The CALLER is the sanctioned
+// mutation owner: the public sf_graph_apply_batch checks the single-owner
+// guard (runner_thread_alive) and then forwards; the runner thread calls it
+// directly on its own thread. Applies cmds[0..n) sequentially — same impl
+// helpers, audit entries and modifiedAt bumps as the synchronous mutators.
+// On the first failing cmd it stops, reports progress via *applied (count
+// applied BEFORE the stop) and returns that cmd's code with its message in
+// *err_out (may be NULL). Rejects SF_CMD_STOP (0) and SF_CMD_EVALUATE_MIXER
+// (7) via the unsupported-type branch — the runner intercepts both before
+// batching. NEVER touches the handle error store (SEC-G3-4: the runner calls
+// this, and the runner never writes proj->lastError); the public entry copies
+// *err_out into the caller's err_buf AND the handle error store.
+sf_result_t apply_batch_impl(sf_project_t* p, const sf_cmd_t* cmds, size_t n,
+                             size_t* applied, std::string* err_out);
 
 // ---------------------------------------------------------------------------
 // ABI exception guard

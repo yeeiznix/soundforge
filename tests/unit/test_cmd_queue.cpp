@@ -7,6 +7,8 @@
 #include "sf_internal.hpp"
 #include "soundforge/sf_command_queue.h"
 #include "soundforge/sf_graph.h"
+#include "soundforge/sf_project.h"
+#include "soundforge/sf_queue_runner.h"
 
 #include <chrono>
 #include <cstring>
@@ -465,5 +467,78 @@ TEST(ApplyBatch, EvaluateMixerIsNotApplicable) {
   ASSERT_EQ(sf_graph_apply_batch(p, &c, 1, &applied, err, sizeof(err)), SF_E_INVALID_ARG);
   EXPECT_EQ(applied, 0u);
   EXPECT_NE(std::string(err).find("unsupported"), std::string::npos);
+  sf_project_destroy(p);
+}
+
+TEST(ApplyBatch, StopControlIsRejectedBySyncPath) {
+  sf_project_t* p = sf_project_create("B", nullptr);
+  ASSERT_NE(p, nullptr);
+
+  // SF_CMD_STOP (0) is runner-only (ORC-2 barrier); the sync entry must never
+  // apply it as a mutation and rejects it like the other unsupported types.
+  EXPECT_EQ(SF_CMD_STOP, 0);
+  sf_cmd_t c = make_cmd(SF_CMD_STOP);
+  size_t applied = 99;
+  char err[128];
+  ASSERT_EQ(sf_graph_apply_batch(p, &c, 1, &applied, err, sizeof(err)), SF_E_INVALID_ARG);
+  EXPECT_EQ(applied, 0u);
+  EXPECT_NE(std::string(err).find("unsupported"), std::string::npos);
+  EXPECT_NE(std::string(err).find("0"), std::string::npos);  // names the type
+  sf_project_destroy(p);
+}
+
+TEST(ApplyBatch, BusyRejectsWhileRunnerActive) {
+  // C7 single-owner guard: while a queue runner is started, the sync entry is
+  // the handle's ONLY external door and it busy-rejects every caller — the
+  // runner owns the mutation thread (D3-amd SEC-G3-1). After stop+join (C8)
+  // the handle is caller-owned again and sync use works.
+  sf_project_t* p = sf_project_create("B", nullptr);
+  ASSERT_NE(p, nullptr);
+  sf_cmd_queue_t* q = nullptr;
+  ASSERT_EQ(sf_cmd_queue_create(&q), SF_OK);
+  sf_queue_runner_t* r = nullptr;
+  ASSERT_EQ(sf_queue_runner_create(&r, q, p), SF_OK);
+  ASSERT_EQ(sf_queue_runner_start(r), SF_OK);
+
+  sf_cmd_t c = make_cmd(SF_CMD_ADD_NODE);
+  c.port_a = SF_NODE_SOURCE;
+  std::strncpy(c.id1, "sync", sizeof(c.id1) - 1);
+  size_t applied = 99;
+  char err[128] = "";
+
+  // Hammer: every sync apply while the runner is running must busy-reject.
+  for (int i = 0; i < 500; ++i) {
+    ASSERT_EQ(sf_graph_apply_batch(p, &c, 1, &applied, err, sizeof(err)), SF_E_IO);
+    EXPECT_EQ(applied, 0u);
+    EXPECT_NE(std::string(err).find("busy"), std::string::npos);
+  }
+  ASSERT_NE(sf_last_error(p), nullptr);
+  EXPECT_STREQ(sf_last_error(p), "project.busy: queue runner active");
+
+  // The runner lane itself still works while the guard is up.
+  sf_cmd_t qc = make_cmd(SF_CMD_ADD_NODE);
+  qc.port_a = SF_NODE_SOURCE;
+  std::strncpy(qc.id1, "lane", sizeof(qc.id1) - 1);
+  ASSERT_EQ(sf_cmd_queue_enqueue(q, &qc), SF_OK);
+  auto* ip = reinterpret_cast<sfcore::SfProject*>(p);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  while (sf_cmd_queue_depth(q) > 0 && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  EXPECT_EQ(sf_cmd_queue_depth(q), 0);
+
+  ASSERT_EQ(sf_queue_runner_stop(r), SF_OK);
+  ASSERT_EQ(sf_queue_runner_join(r), SF_OK);
+
+  // C8: after stop+join the handle is caller-owned; sync apply succeeds.
+  applied = 99;
+  ASSERT_EQ(sf_graph_apply_batch(p, &c, 1, &applied, err, sizeof(err)), SF_OK);
+  EXPECT_EQ(applied, 1u);
+  EXPECT_EQ(ip->doc.signalGraph.nodes.size(), 2u);  // "lane" + "sync"
+  EXPECT_NE(find_by_name(ip, "lane"), nullptr);
+  EXPECT_NE(find_by_name(ip, "sync"), nullptr);
+
+  ASSERT_EQ(sf_queue_runner_destroy(r), SF_OK);
+  sf_cmd_queue_destroy(q);
   sf_project_destroy(p);
 }

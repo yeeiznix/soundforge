@@ -11,6 +11,7 @@ set(SFCORE_SOURCES
     migration.cpp
     project.cpp
     command_queue.cpp
+    command_queue_thread.cpp
     ../graph/graph_abi.cpp
 )
 

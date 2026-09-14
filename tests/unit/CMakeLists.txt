@@ -18,6 +18,7 @@ add_executable(sf_unit_tests
     test_graph_validate.cpp
     test_graph_mixer.cpp
     test_cmd_queue.cpp
+    test_queue_runner.cpp
     test_dsp_law.cpp
     test_dsp_kernels.cpp
     test_dsp_render.cpp

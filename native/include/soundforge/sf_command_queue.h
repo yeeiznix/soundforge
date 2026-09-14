@@ -1,7 +1,8 @@
 // SoundForge G2 P5 — lock-free SPSC command queue (§4.4, §4.5).
-// Transports *intent*: commands are applied on the project's owner thread via
-// sf_graph_apply_batch (C3). G2 ships this as a tested primitive — no live
-// audio lane consumes it until G3 (C5/C6).
+// Transports *intent*: commands are applied via the G2 sf_graph_apply_batch
+// loop (internal apply_batch_impl — SEC-G3-1). Since G3 P4a the queue's live
+// consumer is sf_queue_runner (C5/C6 rewritten); sync sf_graph_apply_batch
+// stays available but busy-rejects while a runner is active (C7).
 #pragma once
 
 #include <stdint.h>
@@ -14,8 +15,13 @@
 extern "C" {
 #endif
 
-/* Command types carried by the queue. 7 (evaluateMixer) is reserved for the
-   G3 audio lane; sf_graph_apply_batch rejects it (query, not a mutation). */
+/* Command types carried by the queue (D3-amd / D4; slot size stays 176 B —
+   the "revisit with the G3 command set" note is retired with this decision).
+   0 stop       — runner-only CONTROL command (ORC-2 STOP barrier) and
+                  0/7 are REJECTED by sync sf_graph_apply_batch.
+   7 evaluateMixer — runner-only query: the runner stores the result JSON as
+                  its bounded last_report; never applied as a mutation. */
+#define SF_CMD_STOP          0
 #define SF_CMD_ADD_NODE       1
 #define SF_CMD_REMOVE_NODE    2
 #define SF_CMD_ADD_EDGE       3
@@ -30,11 +36,13 @@ extern "C" {
 
 /* Fixed-size command image — never grows (fits the ring slot; 176 B incl.
    8 B alignment padding — content is 168 B). Slot size is a compile-time
-   constant; the 10k-message threaded test asserts no gap and no overflow
-   at capacity 256 (≈ 39 drains). Revisit size with the G3 command set. */
+   constant (D4: stays 176 B with the G3 command set — STOP(0) and
+   EVALUATE_MIXER(7) carry no payload); the 10k-message threaded test asserts
+   no gap and no overflow at capacity 256 (≈ 39 drains). */
 typedef struct sf_cmd {
-  int32_t  type;        /* 1 addNode, 2 removeNode, 3 addEdge, 4 removeEdge,
-                           5 setMixer, 6 setPreset, 7 evaluateMixer */
+  int32_t  type;        /* 0 stop, 1 addNode, 2 removeNode, 3 addEdge,
+                           4 removeEdge, 5 setMixer, 6 setPreset,
+                           7 evaluateMixer */
   uint64_t seq;         /* monotonic, assigned by enqueue */
   char     id1[64];     /* node/edge uuid / new-node name (addNode); NUL-terminated */
   char     id2[64];     /* second uuid (edge target / preset id); NUL-terminated */
@@ -69,30 +77,54 @@ int32_t sf_cmd_queue_depth(const sf_cmd_queue_t* q);
    bumps per cmd). Applies sequentially; on the first failing cmd it stops,
    copies the error message into err_buf (if err_cap > 0) and returns that
    cmd's code, with *applied = number applied so far. SF_E_INVALID_ARG for
-   unsupported command types (including SF_CMD_EVALUATE_MIXER). */
+   unsupported command types (including SF_CMD_STOP and
+   SF_CMD_EVALUATE_MIXER — both runner-only). Busy-rejects with
+   SF_E_IO "project.busy: queue runner active" while a queue runner is active
+   (C7) — the runner thread consumes the queue and owns the handle's mutation
+   thread; use sf_queue_runner_stop+join (C8) before sync use. */
 sf_result_t sf_graph_apply_batch(sf_project_t* p, const sf_cmd_t* cmds, size_t n,
                                  size_t* applied, char* err_buf, size_t err_cap);
 
 /* ---------------------------------------------------------------------------
- * Threading / concurrency contract (§4.5)
+ * Threading / concurrency contract (§4.5 + G3 P4a D3-amd)
  *
- *  C1  SPSC: one producer, one consumer. Two producers are undefined behavior.
+ *  C1  SPSC: one producer, one consumer. In G3 the runner is the sole
+ *      consumer while started; two consumers are undefined behavior.
  *  C2  Lock-free & malloc-free on push AND pop. create/destroy allocate and
  *      are never called by an audio callback.
  *  C3  A project handle keeps exactly one mutating thread. The queue only
- *      transports intent; sf_graph_apply_batch applies it on the owner
- *      thread. The queue itself shares no state with the handle.
+ *      transports intent; the runner applies it on its own thread. The queue
+ *      itself shares no state with the handle.
  *  C4  seq is a monotonically increasing watermark assigned on ACCEPTANCE;
  *      accepted command seqs are always dense (no gaps by construction). An
  *      overflowed command is rejected (SF_E_IO + WARN) WITHOUT consuming a
  *      seq number, so a producer that retries the same message after a
  *      transient full still delivers a gapless stream. depth() is for
  *      diagnostics.
- *  C5  G2 ships the queue as a tested primitive, not yet on a live audio
- *      lane (no RT callback exists until G3).
- *  C6  In G3 the audio callback drains the queue and applies via
- *      sf_graph_apply_batch. The G2 screens bypass the queue and call the
- *      synchronous mutators directly.
+ *  C5  [G3 P4a rewrite] The queue's live consumer is sf_queue_runner (the
+ *      G2-promised G3 lane): the runner drains bounded batches and applies
+ *      them on its own thread via the internal apply_batch_impl. The queue is
+ *      no longer a dormant primitive — enqueued intent is applied
+ *      asynchronously whenever a runner is started.
+ *  C6  [G3 P4a rewrite] Sync sf_graph_apply_batch remains for non-RT callers
+ *      but busy-rejects (SF_E_IO "project.busy: queue runner active") while a
+ *      runner is active; it never runs concurrently with the runner. STOP(0)
+ *      and EVALUATE_MIXER(7) are runner-only: the sync entry rejects both.
+ *  C7  While a runner is started, the runner owns the handle's mutation
+ *      thread (single-owner invariant enforced at the ABI boundary — D3-amd
+ *      SEC-G3-1/-G3-3). The runner intercepts STOP (stops the drain — ORC-2)
+ *      and EVALUATE_MIXER (stores a bounded ≤8 KiB report — ORC-3); all other
+ *      commands go through apply_batch_impl. The runner NEVER writes
+ *      proj->lastError (SEC-G3-4).
+ *  C8  Lifecycle ordering: stop() then join() BEFORE any external access or
+ *      destroy (runner destroy or sf_project_destroy) — the runner's epilogue
+ *      publishes STOPPED only after its last batch. After stop+join the
+ *      handle is owned by the caller again (sync use allowed; the lifecycle
+ *      itself is one-shot — start accepts IDLE only). The forward race
+ *      documented in D3-amd: the sync guard is a single atomic check, so a
+ *      runner starting CONCURRENTLY with an external call can still race into
+ *      it — callers must not start/stop a runner while other ABI calls on the
+ *      same handle are in flight.
  * ------------------------------------------------------------------------- */
 #ifdef __cplusplus
 }
