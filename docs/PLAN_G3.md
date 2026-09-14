@@ -1,10 +1,12 @@
 # SoundForge — Gate G3 Plan: Full Audio Gate — DSP Engine, Mixing Law, RT
 # Queue-Drain Lane, DspChain Editor, Name Model, Depth Cap
 
-> **Status:** DRAFT — planning deliverable only. Pending adversarial review by
-> @oracle (architecture) + @security-reviewer (surface); the pre-review open
-> list is §10.5. **No implementation happens in this document** — it is the
-> contract for gate execution after review.
+> **Status:** Executed — all phases committed, tag `g3-complete`. Gate G3 is
+> complete on `main`: P1–P8 committed (`1436644`…this commit), full §7.5 suite
+> green (232/232 ctest reg, 232/232 UBSan, 12 pytest, drift empty, JNI grep
+> 26, `0.1.0-g3` in both caches); evidence in `docs/RELEASE_NOTES_G3.md`.
+> Adversarial review complete by @oracle (architecture) + @security-reviewer
+> (surface); verdicts in §10.5 below (historical).
 > **Supersedes:** `docs/PLAN_G0.md`/`PLAN_G1.md`/`PLAN_G2.md` for G3 scope only.
 > G0/G1/G2 remain the contract for everything not changed here.
 > **Deliverable changes:** the static routing-desk estimate becomes a *real,
@@ -680,9 +682,9 @@ G2 taught us the actual will grow — that is fine, evidence-first). pytest
 9 → ~11. JNI 25 → 26.
 
 ### P0 — Plan commit (Lane All, ½ day)
-- [ ] **Goal:** reviewable contract — this file.
-- [ ] **Files:** `docs/PLAN_G3.md` (this document).
-- [ ] **Acceptance:** §1–§10 present and internally consistent; **adversarial
+- [x] **Goal:** reviewable contract — this file.
+- [x] **Files:** `docs/PLAN_G3.md` (this document).
+- [x] **Acceptance:** §1–§10 present and internally consistent; **adversarial
       review COMPLETE (2026-09-13)** — verdicts recorded in §10.5.1/.2,
       amendments folded into the phases/decisions, gate verdict §10.5.3 =
       APPROVED (no open HIGH findings); the review history is the P1 entry
@@ -690,15 +692,15 @@ G2 taught us the actual will grow — that is fine, evidence-first). pytest
 - **Validation:** human review (no code). **Commit:** `plan(g3): PLAN_G3.md draft — DSP law + queue runner + DspChain UI + name model + depth cap`
 
 ### P1 — Name model + version stamp (Lane B, 1 day)
-- [ ] **Goal:** `sf_scene_rename` + char caps + freeze tracking; `0.1.0-g3`
+- [x] **Goal:** `sf_scene_rename` + char caps + freeze tracking; `0.1.0-g3`
       everywhere including caches; the missed G2 bump documented.
-- [ ] **Files:** `sf_project.h` (+`sf_scene_rename`), `project.cpp`,
+- [x] **Files:** `sf_project.h` (+`sf_scene_rename`), `project.cpp`,
       `sf_internal.hpp` (`utf8_char_count`, `kMaxJsonDepth` placeholder),
       `graph.cpp` (label caps), `sf_version.h`, `native/CMakeLists.txt`,
       python `__init__.py`/`migrate.py`, `test_name_model.cpp` (NEW),
       `test_scene_venue.cpp` + `test_graph_nodes.cpp` + `test_version.cpp`
       (EDIT).
-- [ ] **Acceptance:** `sf_scene_rename` audit = `scene.update`, `modifiedAt`
+- [x] **Acceptance:** `sf_scene_rename` audit = `scene.update`, `modifiedAt`
       bumped, name survives save/reopen; 200/201 code-point boundary + 800/801
       byte boundary; multibyte label ≤64 cps accepted (was lenient in bytes —
       relaxation test both old/new); `utf8_char_count` invalid-UTF-8 fail-open
@@ -708,12 +710,12 @@ G2 taught us the actual will grow — that is fine, evidence-first). pytest
   `p1(g3): scene rename + char caps + version stamp 0.1.0-g3 (missed g2 bump documented)`
 
 ### P2 — `sfdsp` static library: law + kernels (Lane A1, 1–1.5 days)
-- [ ] **Goal:** the DSP module proper — kernels and law, host-unit-testable,
+- [x] **Goal:** the DSP module proper — kernels and law, host-unit-testable,
       nothing wired yet.
-- [ ] **Files:** `dsp/CMakeLists.txt` (INTERFACE→STATIC), `dsp_internal.hpp`,
+- [x] **Files:** `dsp/CMakeLists.txt` (INTERFACE→STATIC), `dsp_internal.hpp`,
       `law.cpp`, `kernels.cpp` (NEW); `test_dsp_law.cpp`, `test_dsp_kernels.cpp`
       (NEW). `routing.cpp`/`dsp_render.cpp` NOT touched yet.
-- [ ] **Acceptance:** pan invariant L²+R²=1 across −1..1 sweep +
+- [x] **Acceptance:** pan invariant L²+R²=1 across −1..1 sweep +
       monotonicity; soft_limit finite for ±1e30 inputs, hard ceiling exact,
       no NaN/Inf; law bracket property power ≤ coherent; headroom −6.02 dB at
       peak 2.0 / null on no routes; kernels deterministic (two identical runs
@@ -722,16 +724,16 @@ G2 taught us the actual will grow — that is fine, evidence-first). pytest
   `p2(g3): sfdsp static lib — mixing law + finite-block kernels`
 
 ### P3 — Law integration + chain-render harness (Lane A2, 1 day)
-- [ ] **Goal:** `evaluate_mixer` reports the law (additive keys, single-source
+- [x] **Goal:** `evaluate_mixer` reports the law (additive keys, single-source
       numbers byte-compatible); the render harness proves kernels + law
       compose.
-- [ ] **Files:** `routing.cpp` (via `sfcore::dsp::merge_law`),
+- [x] **Files:** `routing.cpp` (via `sfcore::dsp::merge_law`),
       `graph/CMakeLists.txt` (link `sfdsp`), `dsp_render.cpp` (NEW, compiled
       into sfgraph); `test_dsp_render.cpp` (NEW), `test_graph_mixer.cpp`
       (EDIT — multi-source: `peakGainLin` = Σ, `powerGainLin` = √Σg²,
       `headroomDb`, `clipped` ⇔ `headroomDb<0`; existing single-source cases
       **untouched and green**).
-- [ ] **Acceptance:** G2 mixer tests pass unmodified; new law assertions hold;
+- [x] **Acceptance:** G2 mixer tests pass unmodified; new law assertions hold;
       render harness: 2-node chain (src gain −6 dB → out) renders a DC block to
       exactly half amplitude (1e-12); mute/solo exclusion; block-boundary
       determinism (1024 samples = 2×512 blocks, same output as one 512 block
@@ -747,10 +749,10 @@ module + lifecycle state machine + queue contract; P4b = the guard sweep**
 leaves the tree green.
 
 #### P4a — runner module + state machine + contract
-- [ ] **Goal:** the live RT drain lane (G0 "no lock/malloc in the hot path"
+- [x] **Goal:** the live RT drain lane (G0 "no lock/malloc in the hot path"
       intact) + `{IDLE,RUNNING,STOPPING,STOPPED}` lifecycle; provable single
       owner.
-- [ ] **Files:** `sf_queue_runner.h` (6 exports: create/start/stop/join/
+- [x] **Files:** `sf_queue_runner.h` (6 exports: create/start/stop/join/
       last_report/**destroy** — D3-amd), `command_queue_thread.cpp` (NEW),
       `sf_command_queue.h` (C5/C6 rewritten, +C7/C8, `SF_CMD_STOP`=0, STOP
       barrier semantics — ORC-2), `sf_internal.hpp` (state machine + explicit
@@ -758,7 +760,7 @@ leaves the tree green.
       `command_queue.cpp` (**apply_batch_impl split** — SEC-G3-1: public entry
       busy-rejects when runner active then forwards; runner calls impl),
       `test_queue_runner.cpp` (NEW), `test_cmd_queue.cpp` (EDIT).
-- [ ] **Acceptance:** lifecycle create→start→stop→join→destroy; 10k `addNode`
+- [x] **Acceptance:** lifecycle create→start→stop→join→destroy; 10k `addNode`
       cmds enqueued while running → applied by the runner (10k nodes, 10k
       audits, seq dense); `EVALUATE` via cmd 7 → valid result JSON in
       `last_report` (bounded copy ≤8 KiB, `"_truncated": true` sentinel when
@@ -774,13 +776,13 @@ leaves the tree green.
       **Commit:** `p4a(g3): sf_queue_runner + lifecycle state machine + apply_batch_impl split`
 
 #### P4b — the guard sweep (completeness-critical)
-- [ ] **Goal:** every `sf_*` entry touching `doc`/`lastError` has a guard
+- [x] **Goal:** every `sf_*` entry touching `doc`/`lastError` has a guard
       decision; the single-owner invariant is enforced at the ABI boundary.
-- [ ] **Files:** `graph_abi.cpp` (mutator + read guards — R-B(c)),
+- [x] **Files:** `graph_abi.cpp` (mutator + read guards — R-B(c)),
       `project.cpp` (save/destroy/clone guards + `sf_scene_rename` guard),
       `sf_queue_runner.h` (contract: runner never writes `proj->lastError` —
       SEC-G3-4), `test_queue_runner.cpp` (EDIT — guard cases).
-- [ ] **Acceptance — explicit per-site checklist:** all 14 mutating entries
+- [x] **Acceptance — explicit per-site checklist:** all 14 mutating entries
       (6 `graph_abi.cpp` graph mutators + 7 `project.cpp` incl.
       `sf_project_save_to_path` + destroy + `sf_scene_rename`) reject
       `SF_E_IO "project.busy: queue runner active"` while RUNNING; all
@@ -799,16 +801,16 @@ leaves the tree green.
       `p4b(g3): guard sweep — mutator/read/destroy/clone single-owner enforcement`
 
 ### P5 — `dspPresetRef` on the wire (Lane B — prerequisite of P6, 1 day)
-- [ ] **Goal:** preset attachments persist; schema v2.2 refresh under full
+- [x] **Goal:** preset attachments persist; schema v2.2 refresh under full
       golden discipline.
-- [ ] **Files:** `project_schema.json` (signalNode +`dspPresetRef`),
+- [x] **Files:** `project_schema.json` (signalNode +`dspPresetRef`),
       `json_codec.cpp` (write/read, "" ↔ null), `schema.cpp` (validator
       mirrors), `tests/golden/schema_golden_v2.json` (**REGEN**),
       `test_schema_py.py` (**both pins same commit**),
       `fixtures/project_dspchain_v2.json` (NEW), `test_graph_roundtrip.cpp`
       (EDIT — extends `GraphMixerAndEdgeIdsSurviveRoundTrip`),
       `test_schema_validate.cpp` (EDIT), `SignalKt.kt` (+`dspPresetRef`).
-- [ ] **Acceptance:** drift `diff` empty after regen; digest pins updated **in
+- [x] **Acceptance:** drift `diff` empty after regen; digest pins updated **in
       this commit**; new fixture validates in native + Python; round-trip:
       setPreset → save → reopen → `dspPresetRef` equal, legacy doc without the
       key opens and reads `""`; `sf_graph_set_preset` validation unchanged
@@ -823,14 +825,14 @@ leaves the tree green.
   `p5(g3): dspPresetRef on wire — schema v2.2 refresh + golden + pins`
 
 ### P6 — DspChain editor + scene-name field + dirty flags (Lane UI, 1–1.5 days, static-only)
-- [ ] **Goal:** the G0 placeholder becomes a real editor; the scene screen
+- [x] **Goal:** the G0 placeholder becomes a real editor; the scene screen
       gains a *real* scene-name field (project-rename behavior preserved);
       `DirtyField` covers the new fields only.
-- [ ] **Files:** `DspChainKt.kt`, `DspChainViewModel.kt`, `common/DirtyField.kt`
+- [x] **Files:** `DspChainKt.kt`, `DspChainViewModel.kt`, `common/DirtyField.kt`
       (NEW); `DspChainScreen.kt`, `SceneEditorScreen.kt`, `NavGraph.kt`,
       `ProjectViewModel.kt`, `jni_bridge.cpp` (+`sceneRename` → 26),
       `NativeBridge.kt` (+mirror) (EDIT).
-- [ ] **Acceptance:** DspChainScreen lists nodes with preset chips
+- [x] **Acceptance:** DspChainScreen lists nodes with preset chips
       (attach/replace/clear over existing `dspPresets` envelopes only), errors
       inline via `lastEditError`, **zero `NativeBridge.*` in composables**;
       scene screen has two distinct fields — "Scene name" (new, `DirtyField`,
@@ -843,16 +845,16 @@ leaves the tree green.
       `p6(g3): dsp chain editor + scene-name field + dirty flags (jni 26)`
 
 ### P7 — JSON depth pre-parse gate (Lane C — parallelizable, 1 day)
-- [ ] **Goal:** bound stack-exhaustion exposure on **all 4 raw-JSON entry
+- [x] **Goal:** bound stack-exhaustion exposure on **all 4 raw-JSON entry
       points**; the nlohmann fork disposition recorded.
-- [ ] **Files:** `sf_internal.hpp` (`kMaxJsonDepth = 256`, `checked_parse()`
+- [x] **Files:** `sf_internal.hpp` (`kMaxJsonDepth = 256`, `checked_parse()`
       shared helper — SEC-G3-7), `schema.cpp` (`scan_json_depth()` — strict
       one-escape-char iterative, string/escape-aware, applied via
       `checked_parse()`), `project.cpp` (from_json + open_from_path move onto
       `checked_parse()`), `migration.cpp` (migrate_json onto `checked_parse()`
       — SEC-G3-7/ORC-4c), `test_json_depth.cpp` (NEW), `test_schema_validate.cpp`
       (EDIT).
-- [ ] **Acceptance — scanner contract (SEC-G3-8):** pre-rejects ⊆ nlohmann
+- [x] **Acceptance — scanner contract (SEC-G3-8):** pre-rejects ⊆ nlohmann
       rejects; accept-set equal; depth equal on every nlohmann-accept. Depth 256
       accepted / 257 rejected with `last_error` `"schema: json depth exceeds
       256"`; unterminated-string → distinct pre-reject text `"schema: unterminated
@@ -869,14 +871,17 @@ leaves the tree green.
       `p7(g3): checked_parse depth gate on all 4 json entries — nlohmann fork BLOCKED documented`
 
 ### P8 — Docs + DoD sweep + tag (Lane All, ½ day)
-- [ ] **Goal:** gate artifact.
-- [ ] **Files:** `docs/RELEASE_NOTES_G3.md` (NEW), this plan finalized,
+- [x] **Goal:** gate artifact.
+- [x] **Files:** `docs/RELEASE_NOTES_G3.md` (NEW), this plan finalized,
       §10.5 verdicts resolved/re-deferred.
-- [ ] **Acceptance:** full suite (§7.5) green: ctest reg + UBSan, pytest,
+- [x] **Acceptance:** full suite (§7.5) green: ctest reg + UBSan, pytest,
       drift empty, grep **26**; version stamp `0.1.0-g3` in both reconfigured
       caches; **§10.5 verdicts table: every SEC-G3-*/ORC-*/R-* row discharged
       (folded into the phases above) or re-deferred with a residual — the DoD
       checklist (§8) is the sweep source of truth**; tag `g3-complete`.
+- **Evidence:** 232/232 ctest (reg) + 232/232 (UBSan); 12 pytest passed; drift
+  diff empty; JNI grep 26; `SF_BUILD_VERSION=0.1.0-g3` in both caches;
+  `ctest -R Version` 4/4. See `docs/RELEASE_NOTES_G3.md` evidence table.
 - **Validation:** evidence table in release notes (G2 style).
   **Commit:** `p8(g3): release notes + DoD sweep; tag g3-complete`
 
@@ -1111,6 +1116,11 @@ Both reviews initial attempts; security gate was **BLOCKED pending amendment**
 MED/LOW). All findings are plan-text amendments — **all folded above and in the
 phases** — no architecture rework. **Effective verdict: APPROVED — P0 commits
 this amended plan; no phase starts on an open HIGH finding.**
+
+**P8 delivery (2026-09-14):** every SEC-G3-*/ORC-*/R-* row above is discharged
+as folded into the committed phases (or re-deferred as a documented residual,
+§10.4 + release-notes "Gate-review residuals carried"). All phases P0–P8
+committed; full §7.5 suite green; tag `g3-complete`. **Gate executed/APPROVED.**
 
 ---
 
