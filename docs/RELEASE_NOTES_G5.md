@@ -13,8 +13,8 @@ G4 shipped a host-testable audio engine with a fixed output target (set at
 command** (`SF_CMD_SET_OUTPUT`, cmd 8) that the runner intercepts on its own
 thread, triggering a fresh plan compile and publish without the runner touching
 the engine instance — the next rendered tick reads the new target. G5 also
-implements **three hardening lanes** for the G4 residuals (G4-8, G4-9) and
-reclassifies one (G4-6 — premise false):
+implements **two hardening lanes** for the G4 residuals (G4-8, G4-9),
+reclassifies one (G4-6 — premise false), and declines one (G4-5 — YAGNI):
 
 - **Live-control command** (`SF_CMD_SET_OUTPUT`, cmd 8): runner intercepts,
   extracts target id from `cmd.id1` (bounded copy via `strnlen` —
@@ -116,7 +116,7 @@ Meter fields are plain `double` guarded by a single engine `std::mutex meter_mu`
 
 | Check | Result | Note |
 |---|---|---|
-| `cmake --build native/build && ctest` | **314 registered / 313 passed, 1 skipped** | 313 + 1 locale skip (de_DE.UTF-8); 2 net-new tests (LiveControlSameTargetRetargetBenign, LiveControlRetargetObservableAmplitudeAndMeterAdvance); 2 engine P4 tests merged in |
+| `cmake --build native/build && ctest` | **314 registered / 313 passed, 1 skipped** | 313 + 1 locale skip (de_DE.UTF-8); 6 net-new across P1/P4/P5 (G4 end 308 → 314, zero removals): 2 cmd-8, 2 destroy-order, 2 live-control |
 | UBSan build `ctest` (`native/build-asan`) | **314 registered / 313 passed, 1 skipped** | `-fsanitize=undefined -fno-sanitize-recover=all`; same 1 locale skip |
 | `ctest -R Version` | **4/4** | `sf_engine_version() == 0.1.0-g5`; `SF_ENGINE_VERSION_SUFFIX` `-g5` |
 | `pytest tests/python_tests -q` | **12 passed** | unchanged (version string only) |

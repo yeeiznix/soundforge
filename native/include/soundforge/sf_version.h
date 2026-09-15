@@ -25,7 +25,7 @@ extern "C" {
   SF_STR(SF_ENGINE_VERSION_MAJOR) "." SF_STR(SF_ENGINE_VERSION_MINOR) "." \
   SF_STR(SF_ENGINE_VERSION_PATCH) SF_ENGINE_VERSION_SUFFIX
 
-/* Static string, e.g. "0.1.0-g4" (build stamp via CMake version_gen.h). */
+/* Static string, e.g. "0.1.0-g5" (build stamp via CMake version_gen.h). */
 const char* sf_engine_version(void);
 
 /* Current canonical schema version, e.g. 1. */
