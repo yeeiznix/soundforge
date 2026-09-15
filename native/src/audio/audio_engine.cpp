@@ -89,7 +89,9 @@ struct sf_audio_engine_s {
   std::atomic<bool> plan_valid{false};
   std::atomic<uint64_t> blocks_rendered{0};
 
-  std::string out_node_id;  // CREATED-only writer; read by the observer at publish
+  std::string out_node_id;  // CREATED-only via static set_output; runner-thread
+                            // writer via engine_set_output (G5 P1); read by the
+                            // observers at publish (runner thread)
   sf_audio_engine_config_t cfg{};
 
   // Heap-held so start()'s rollback can restore a clean pre-start store.
@@ -262,6 +264,23 @@ void snapshot_publish(void* user, const SignalGraphDoc& graph) {
     e->plan_valid.store(false, std::memory_order_release);
     log_line(SF_LOG_ERROR, "engine",
              ("plan compile failed: " + err).c_str());
+  }
+}
+
+// Live-output observer (G5 P1): fired on the runner thread when a
+// SF_CMD_SET_OUTPUT command drains. The runner owns the doc here, so reading
+// proj->doc.signalGraph and rewriting out_node_id are single-threaded.
+void engine_set_output(void* user, const char* target) {
+  auto* e = static_cast<sf_audio_engine_s*>(user);
+  e->out_node_id = target ? target : "";
+  std::string err;
+  const bool ok = e->store->publish(e->proj->doc.signalGraph, e->out_node_id, err);
+  if (ok) {
+    e->plan_valid.store(true, std::memory_order_release);
+    log_line(SF_LOG_DEBUG, "engine", "live output changed");
+  } else {
+    e->plan_valid.store(false, std::memory_order_release);
+    log_line(SF_LOG_ERROR, "engine", ("plan compile failed: " + err).c_str());
   }
 }
 
@@ -452,6 +471,7 @@ sf_result_t sf_audio_engine_start(sf_audio_engine_t* e, uint32_t flags) {
 
   // Attach the publish observer BEFORE the runner starts (R-D lifetime rule).
   RunnerObserver obs{static_cast<void*>(e), &snapshot_publish};
+  obs.set_output = &engine_set_output;  // G5 P1: live retarget callback
   sf_queue_runner_set_observer(e->runner, &obs);
 
   if (sf_queue_runner_start(e->runner) != SF_OK) {

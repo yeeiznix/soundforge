@@ -18,9 +18,12 @@ extern "C" {
 /* Command types carried by the queue (D3-amd / D4; slot size stays 176 B —
    the "revisit with the G3 command set" note is retired with this decision).
    0 stop       — runner-only CONTROL command (ORC-2 STOP barrier) and
-                  0/7 are REJECTED by sync sf_graph_apply_batch.
+                  0/7/8 are REJECTED by sync sf_graph_apply_batch.
    7 evaluateMixer — runner-only query: the runner stores the result JSON as
-                  its bounded last_report; never applied as a mutation. */
+                  its bounded last_report; never applied as a mutation.
+   8 setOutput  — runner-only CONTROL command (G5 P1): the runner forwards
+                  id1 to the engine observer, which recompiles/publishes the
+                  plan with the new target; never applied as a mutation. */
 #define SF_CMD_STOP          0
 #define SF_CMD_ADD_NODE       1
 #define SF_CMD_REMOVE_NODE    2
@@ -29,6 +32,7 @@ extern "C" {
 #define SF_CMD_SET_MIXER      5
 #define SF_CMD_SET_PRESET     6
 #define SF_CMD_EVALUATE_MIXER 7
+#define SF_CMD_SET_OUTPUT     8
 
 /* setMixer flags (cmd.flags). */
 #define SF_MIXER_FLAG_MUTE 0x1
@@ -42,9 +46,10 @@ extern "C" {
 typedef struct sf_cmd {
   int32_t  type;        /* 0 stop, 1 addNode, 2 removeNode, 3 addEdge,
                            4 removeEdge, 5 setMixer, 6 setPreset,
-                           7 evaluateMixer */
+                           7 evaluateMixer, 8 setOutput */
   uint64_t seq;         /* monotonic, assigned by enqueue */
-  char     id1[64];     /* node/edge uuid / new-node name (addNode); NUL-terminated */
+  char     id1[64];     /* node/edge uuid / new-node name (addNode); new output
+                           node id (setOutput); NUL-terminated */
   char     id2[64];     /* second uuid (edge target / preset id); NUL-terminated */
   double   value;       /* gain_db (setMixer) */
   double   value2;      /* pan (setMixer) */
@@ -77,8 +82,8 @@ int32_t sf_cmd_queue_depth(const sf_cmd_queue_t* q);
    bumps per cmd). Applies sequentially; on the first failing cmd it stops,
    copies the error message into err_buf (if err_cap > 0) and returns that
    cmd's code, with *applied = number applied so far. SF_E_INVALID_ARG for
-   unsupported command types (including SF_CMD_STOP and
-   SF_CMD_EVALUATE_MIXER — both runner-only). Busy-rejects with
+   unsupported command types (including SF_CMD_STOP, SF_CMD_EVALUATE_MIXER and
+   SF_CMD_SET_OUTPUT — all runner-only). Busy-rejects with
    SF_E_IO "project.busy: queue runner active" while a queue runner is active
    (C7) — the runner thread consumes the queue and owns the handle's mutation
    thread; use sf_queue_runner_stop+join (C8) before sync use. */
@@ -112,9 +117,10 @@ sf_result_t sf_graph_apply_batch(sf_project_t* p, const sf_cmd_t* cmds, size_t n
  *      and EVALUATE_MIXER(7) are runner-only: the sync entry rejects both.
  *  C7  While a runner is started, the runner owns the handle's mutation
  *      thread (single-owner invariant enforced at the ABI boundary — D3-amd
- *      SEC-G3-1/-G3-3). The runner intercepts STOP (stops the drain — ORC-2)
- *      and EVALUATE_MIXER (stores a bounded ≤8 KiB report — ORC-3); all other
- *      commands go through apply_batch_impl. The runner NEVER writes
+ *      SEC-G3-1/-G3-3). The runner intercepts STOP (stops the drain — ORC-2),
+ *      EVALUATE_MIXER (stores a bounded ≤8 KiB report — ORC-3) and
+ *      SET_OUTPUT (forwards the target to the engine observer — G5 P1); all
+ *      other commands go through apply_batch_impl. The runner NEVER writes
  *      proj->lastError (SEC-G3-4).
  *  C8  Lifecycle ordering: stop() then join() BEFORE any external access or
  *      destroy (runner destroy or sf_project_destroy) — the runner's epilogue

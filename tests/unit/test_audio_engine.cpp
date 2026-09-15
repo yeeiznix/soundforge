@@ -982,3 +982,71 @@ TEST(AudioEngine, E2eReadGuardBusyWhileRunningThenSynchronousAfterJoin) {
   EXPECT_EQ(sf_graph_validate(f.p, report, sizeof(report)), SF_OK);
   EXPECT_EQ(sf_project_get_schema_version(f.p), SF_SCHEMA_VERSION);
 }
+
+// ---------------------------------------------------------------------------
+// G5 P1 — SF_CMD_SET_OUTPUT (cmd 8): public constant + runner interception
+// (PLAN_G5 §3.1 D1, §3.3 D3 + SEC-G5-01)
+// ---------------------------------------------------------------------------
+
+// The new command type is a public, runtime-only constant: cmd 8, no slot
+// growth (the wire/slot image stays 176 B) and it round-trips through the
+// queue with its type + id1 payload preserved.
+TEST(AudioEngine, SetOutputCommandConstantRoundTripsThroughQueue) {
+  EXPECT_EQ(SF_CMD_SET_OUTPUT, 8);
+  EXPECT_EQ(sizeof(sf_cmd_t), 176u);  // no wire/slot growth
+
+  sf_cmd_queue_t* q = nullptr;
+  ASSERT_EQ(sf_cmd_queue_create(&q), SF_OK);
+  sf_cmd_t in{};
+  in.type = SF_CMD_SET_OUTPUT;
+  std::strncpy(in.id1, "out", sizeof(in.id1) - 1);
+  ASSERT_EQ(sf_cmd_queue_enqueue(q, &in), SF_OK);
+
+  sf_cmd_t out{};
+  ASSERT_EQ(sf_cmd_queue_dequeue(q, &out), SF_OK);
+  EXPECT_EQ(out.type, SF_CMD_SET_OUTPUT);
+  EXPECT_STREQ(out.id1, "out");
+  EXPECT_EQ(sf_cmd_queue_depth(q), 0);
+  sf_cmd_queue_destroy(q);
+}
+
+// SEC-G5-01 negative test (P1 acceptance): an id1 with no NUL in all 64 bytes
+// must NOT escape the field as an unbounded scan. The runner bounds the copy
+// with strnlen(id1, sizeof(id1)); the resulting unknown target compiles to a
+// valid plan that renders silence (SEC-G5-02), so the drain completes with no
+// crash/overread and the engine keeps its known behavior. A control command is
+// never applied as a mutation: no audit entry, schemaVersion unchanged.
+TEST(AudioEngine, SetOutputCommandUnterminatedIdDrainsSafely) {
+  Fixture f;
+  ASSERT_TRUE(f.make());
+  ASSERT_NO_FATAL_FAILURE(f.configure_default());
+  set_chain(f.p, 0.0);  // gain 0 dB -> the "out" target renders 1.0
+  f.io.dc = 1.0f;
+  ASSERT_EQ(sf_audio_engine_set_output(f.e, "out"), SF_OK);
+  ASSERT_EQ(sf_audio_engine_start(f.e, 0), SF_OK);
+
+  // Baseline: the static target renders the source block.
+  ASSERT_EQ(sf_audio_engine_tick(f.e, 64), SF_OK);
+  EXPECT_NEAR(f.io.last_l[0], 1.0f, 1e-6f);
+  auto* ip = reinterpret_cast<sfcore::SfProject*>(f.p);
+  const size_t audit_before = ip->doc.auditLog.size();
+
+  sf_cmd_t cmd{};
+  cmd.type = SF_CMD_SET_OUTPUT;
+  std::memset(cmd.id1, 'A', sizeof(cmd.id1));  // 64 bytes, no NUL terminator
+  ASSERT_EQ(sf_cmd_queue_enqueue(f.q, &cmd), SF_OK);
+
+  // Deterministic STOP-barrier drain: the interception ran, the engine-side
+  // callback re-published a plan with the (bounded) unknown target.
+  ASSERT_NO_FATAL_FAILURE(p5_drain(f.q, f.p));
+
+  ASSERT_EQ(sf_audio_engine_tick(f.e, 64), SF_OK);
+  EXPECT_EQ(f.io.last_l[0], 0.0f);  // unknown target -> silence, no overread
+  EXPECT_EQ(f.io.last_r[0], 0.0f);
+  EXPECT_EQ(meter(f.e)["planValid"], true);  // unknown target is not a compile failure
+
+  // Control command: no mutation -> no audit entry, no schema change.
+  EXPECT_EQ(ip->doc.auditLog.size(), audit_before);
+  EXPECT_FALSE(p5_audit_has(ip, "project.migrate"));
+  EXPECT_EQ(ip->doc.schemaVersion, SF_SCHEMA_VERSION);
+}

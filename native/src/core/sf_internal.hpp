@@ -512,9 +512,10 @@ inline bool runner_busy_reader(const SfProject* p, const char* tag) {
 // helpers, audit entries and modifiedAt bumps as the synchronous mutators.
 // On the first failing cmd it stops, reports progress via *applied (count
 // applied BEFORE the stop) and returns that cmd's code with its message in
-// *err_out (may be NULL). Rejects SF_CMD_STOP (0) and SF_CMD_EVALUATE_MIXER
-// (7) via the unsupported-type branch — the runner intercepts both before
-// batching. NEVER touches the handle error store (SEC-G3-4: the runner calls
+// *err_out (may be NULL). Rejects SF_CMD_STOP (0), SF_CMD_EVALUATE_MIXER (7)
+// and SF_CMD_SET_OUTPUT (8) via the unsupported-type branch — the runner
+// intercepts all three before batching. NEVER touches the handle error store
+// (SEC-G3-4: the runner calls
 // this, and the runner never writes proj->lastError); the public entry copies
 // *err_out into the caller's err_buf AND the handle error store.
 sf_result_t apply_batch_impl(sf_project_t* p, const sf_cmd_t* cmds, size_t n,
@@ -536,9 +537,14 @@ class PlanSnapshotStore;  // snapshot.hpp (kept out of this header)
 // MUST be noexcept in effect: the snapshot store's publish() already contains
 // compile throws (ORC-G4-03), and the runner additionally fences this call so
 // nothing can escape the runner thread. A null `publish` means "no observer".
+// `set_output` (G5 P1) is fired on the runner thread when an SF_CMD_SET_OUTPUT
+// (cmd 8) command drains: `target` is the bounded new output node id. Like
+// `publish`, the callback is fenced by the runner; a null pointer means "no
+// observer" and the command is dropped with a DEBUG log only.
 struct RunnerObserver {
   void* user = nullptr;  // opaque engine instance; never dereferenced here
   void (*publish)(void* user, const SignalGraphDoc& graph) = nullptr;
+  void (*set_output)(void* user, const char* target) = nullptr;
 };
 
 // Attaches (obs != NULL) or detaches (obs == NULL) the runner's observer.

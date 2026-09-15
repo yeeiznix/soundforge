@@ -5,12 +5,16 @@
 // up to kRunnerBatch commands, and applies them on its own thread via
 // sfcore::apply_batch_impl — the exact internal loop the sync ABI entry uses,
 // so a queued command mutates the project identically (audit + modifiedAt
-// bumps included). Two command types are intercepted BEFORE apply_batch:
+// bumps included). Three command types are intercepted BEFORE apply_batch:
 //
 //   SF_CMD_STOP (0)          — control: stop filling the batch and exit the
 //                              drain loop; commands behind STOP stay queued.
 //   SF_CMD_EVALUATE_MIXER(7) — query: evaluate_mixer(g) is stored as the
 //                              bounded single-slot last_report.
+//   SF_CMD_SET_OUTPUT (8)    — control (G5 P1): the bounded id1 target is
+//                              forwarded to the engine's observer callback,
+//                              which recompiles + publishes the plan; never
+//                              applied as a mutation (no audit/modifiedAt).
 //
 // Single-owner discipline (SEC-G3-1/-G3-3/-G3-4): while RUNNING/STOPPING the
 // runner is the only thread that mutates the handle; the public
@@ -150,6 +154,22 @@ void run_loop(sf_queue_runner_s* self) {
         log_line(SF_LOG_INFO, "runner",
                  ("evaluate ok seq=" + std::to_string(cmd.seq)).c_str());
         continue;
+      }
+      if (cmd.type == SF_CMD_SET_OUTPUT) {
+        // SEC-G5-01: bound the copy — cmd.id1 is char[64] with no NUL guarantee.
+        const std::string target(cmd.id1, strnlen(cmd.id1, sizeof(cmd.id1)));
+        if (self->observer.set_output != nullptr) {
+          try {
+            self->observer.set_output(self->observer.user, target.c_str());
+          } catch (const std::exception& e) {
+            log_line(SF_LOG_ERROR, "runner",
+                     (std::string("observer set_output failed: ") + e.what()).c_str());
+          } catch (...) {
+            log_line(SF_LOG_ERROR, "runner", "observer set_output failed: unknown");
+          }
+        }
+        log_line(SF_LOG_DEBUG, "runner", "live output retarget");
+        continue;  // control command: do NOT apply as a mutation
       }
       batch[n++] = cmd;
     }
