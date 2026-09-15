@@ -69,7 +69,7 @@ additively on the G0–G3 shell.
   (ORC-G4P3-03); 20k-plan stress, no torn/no-lost/spin 0.
 
 ### P4 — `sf_audio_engine` host audio engine (`1219dd3`)
-- `sf_audio_engine.h` (NEW, 179 lines) + `audio_engine.cpp` (NEW, 673 lines) —
+- `sf_audio_engine.h` (NEW, 178 lines) + `audio_engine.cpp` (NEW, 673 lines) —
   **11 host-only `extern "C"` exports** (`create/destroy/configure/set_output/
   start/stop/join/tick/last_report/meter_json/reset_meters`), opaque handle,
   `sf_audio_engine_io_t` read/write callback protocol, config struct,
@@ -87,9 +87,9 @@ additively on the G0–G3 shell.
   detach → runner destroy → free store → free engine → release claim).
 - **ORC-G4-06:** `set_output("")`/NULL = **valid silence** (`SF_OK`, not an
   error); unknown target compiles `out_index==-1` → silence+false (G3-exact).
-- `last_report` passthrough byte-identical; `test_audio_engine.cpp` (NEW, 29
-  cases); `test_render_plan.cpp` (+direct planned-path + entry-bound tests from
-  ORC-G4P4-02/03).
+- `last_report` passthrough byte-identical; `test_audio_engine.cpp` (NEW, 32
+  cases at the P4 commit, 35 in HEAD incl. the 3 P5 e2e tests); `test_render_plan.cpp`
+  (+direct planned-path + entry-bound tests from ORC-G4P4-02/03).
 
 ### P5 — Engine + runner end-to-end (`0b1ecc1`)
 - `test_audio_engine.cpp` (+3 e2e cases, 198 lines): `source(-6 dB) → output`
@@ -220,7 +220,7 @@ planned value tests in `test_render_plan.cpp`.
 | ORC-G4-06 | LOW | **P4** | configured-empty output target = valid silence |
 | SEC-G4-01 | MED | **P4** | `meter_json` buffer/error contract + locale independence |
 | SEC-G4-02 | MED | **P4** | meter sync layer (engine mutex; no kernel locks) |
-| SEC-G4-03 | LOW | **P3** | = ORC-G4-03 (exception containment) |
+| SEC-G4-03 | MED | **P3** | = ORC-G4-03 (exception containment) |
 | SEC-G4-04 | LOW | **P4** | `block.n > kBlockMaxSamples` entry guard + engine tick both-edge test |
 | SEC-G4-05 | LOW (listed blocking) | **P4** | `start` ordered gate + snapshot-#0 rollback |
 | SEC-G4-06 | LOW | **P4 (documented)** | destroy-mandatory-first posture (= G4-8) |
