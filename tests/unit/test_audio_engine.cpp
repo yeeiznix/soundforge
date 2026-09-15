@@ -15,6 +15,7 @@
 #include "sf_internal.hpp"
 #include "soundforge/sf_audio_engine.h"
 #include "soundforge/sf_command_queue.h"
+#include "soundforge/sf_graph.h"
 #include "soundforge/sf_project.h"
 #include "soundforge/sf_queue_runner.h"
 
@@ -783,4 +784,201 @@ TEST(AudioEngine, LastReportBeforeEvaluateIsIoError) {
   // on the THREAD-LOCAL store (sf_queue_runner_last_report uses set_last_error).
   EXPECT_STREQ(sf_last_error(nullptr), "runner.lastReport: no report yet");
   EXPECT_EQ(sf_audio_engine_last_report(nullptr, buf, sizeof(buf)), SF_E_INVALID_ARG);
+}
+
+// ---------------------------------------------------------------------------
+// P5 — live-loop e2e (PLAN_G4 §6 P5). Proves the full loop: queue mutation ->
+// runner publish observer -> snapshot store -> next tick renders the new plan;
+// the true-peak latch's hold (non-decaying) semantics; and the busy read guard
+// while the engine's internal runner is RUNNING.
+// ---------------------------------------------------------------------------
+namespace {
+
+sf_cmd_t p5_make_cmd(int32_t type) {
+  sf_cmd_t c{};
+  c.type = type;
+  return c;
+}
+
+sf_cmd_t p5_make_set_mixer(const char* node_id, double gain_db, int32_t flags) {
+  sf_cmd_t c{};
+  c.type = SF_CMD_SET_MIXER;
+  std::strncpy(c.id1, node_id, sizeof(c.id1) - 1);
+  c.value = gain_db;  // gain_db
+  c.value2 = 0.0;     // pan
+  c.flags = flags;    // bit0 mute
+  return c;
+}
+
+// Deterministic drain, NO fixed sleeps: enqueue a STOP barrier behind the
+// mutation(s) already queued and poll for the runner epilogue. On the runner
+// thread the mutation is applied and the publish observer fires (publishing
+// the newest snapshot into the store) BEFORE the epilogue's release-store of
+// SfRunnerStopped, so observing STOPPED guarantees the mutation is applied,
+// the snapshot published and the doc quiescent. The engine itself stays
+// RUNNING (only its internal runner stopped), so further ticks still work.
+void p5_drain(sf_cmd_queue_t* q, sf_project_t* p) {
+  sf_cmd_t stop = p5_make_cmd(SF_CMD_STOP);
+  ASSERT_EQ(sf_cmd_queue_enqueue(q, &stop), SF_OK);
+  auto* ip = reinterpret_cast<sfcore::SfProject*>(p);
+  ASSERT_TRUE(wait_until(
+      [&] {
+        return ip->runnerState.load(std::memory_order_acquire) ==
+               static_cast<int32_t>(sfcore::SfRunnerStopped);
+      },
+      30000)) << "runner never reached STOPPED after STOP barrier";
+}
+
+bool p5_audit_has(const sfcore::SfProject* ip, const char* action) {
+  for (const auto& a : ip->doc.auditLog) {
+    if (a.action == action) return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+// Acceptances 1 + 2 + 6 + 7: no-PACE graph source(-6dB)->output renders 0.5
+// with meter 0.5; a queued SF_CMD_SET_MIXER(0dB) while RUNNING is drained
+// deterministically and the NEXT tick renders 1.0 with the latch advancing
+// toward full scale (the interpolator rings the step so the transition peak is
+// ~1.0628, clipped true; a settle tick pins the steady 1.0); no project.migrate
+// audit entry, schemaVersion 2; destroy after the session is clean.
+TEST(AudioEngine, E2eGainMutationRendersNextTickAndLatchAdvancesToFullScale) {
+  Fixture f;
+  ASSERT_TRUE(f.make());
+  ASSERT_NO_FATAL_FAILURE(f.configure_default());
+  set_chain(f.p, -6.0);  // 10^(-6/20) = 0.501187
+  f.io.dc = 1.0f;
+  ASSERT_EQ(sf_audio_engine_set_output(f.e, "out"), SF_OK);
+  ASSERT_EQ(sf_audio_engine_start(f.e, 0), SF_OK);
+
+  // Acceptance 1: prime, reset latches (tails kept), then one steady tick.
+  for (int i = 0; i < 8; ++i) ASSERT_EQ(sf_audio_engine_tick(f.e, 256), SF_OK);
+  ASSERT_EQ(sf_audio_engine_reset_meters(f.e), SF_OK);
+  ASSERT_EQ(sf_audio_engine_tick(f.e, 256), SF_OK);
+  const float half = static_cast<float>(std::pow(10.0, -6.0 / 20.0));
+  EXPECT_NEAR(f.io.last_l[0], half, 1e-6f);
+  EXPECT_NEAR(f.io.last_r[0], half, 1e-6f);
+  const json m0 = meter(f.e);
+  EXPECT_NEAR(m0["truePeakLinear"][0].get<double>(), 0.501187, 1e-3);
+  EXPECT_NEAR(m0["truePeakLinear"][1].get<double>(), 0.501187, 1e-3);
+  EXPECT_EQ(m0["clipped"][0], false);
+  EXPECT_EQ(m0["blocksRendered"], 9u);
+
+  // Acceptance 2: enqueue SET_MIXER(0dB) while RUNNING, drain via STOP
+  // barrier, then the next tick renders 1.0 and the latch advances.
+  sf_cmd_t set0 = p5_make_set_mixer("src", 0.0, 0);
+  ASSERT_EQ(sf_cmd_queue_enqueue(f.q, &set0), SF_OK);
+  ASSERT_NO_FATAL_FAILURE(p5_drain(f.q, f.p));
+  auto* ip = reinterpret_cast<sfcore::SfProject*>(f.p);
+  EXPECT_EQ(ip->doc.signalGraph.nodes[0].mixer.gainDb, 0.0);  // applied
+
+  ASSERT_EQ(sf_audio_engine_tick(f.e, 256), SF_OK);
+  EXPECT_NEAR(f.io.last_l[0], 1.0f, 1e-6f);
+  const json m1 = meter(f.e);
+  EXPECT_NEAR(m1["truePeakLinear"][0].get<double>(), 1.062817, 2e-3);
+  EXPECT_EQ(m1["clipped"][0], true);
+  EXPECT_EQ(m1["blocksRendered"], 10u);
+
+  // Settle tick pins the steady full-scale number: reset latches (tails kept),
+  // one more tick -> latch ~1.0, still clipped.
+  ASSERT_EQ(sf_audio_engine_reset_meters(f.e), SF_OK);
+  ASSERT_EQ(sf_audio_engine_tick(f.e, 256), SF_OK);
+  const json m2 = meter(f.e);
+  EXPECT_NEAR(m2["truePeakLinear"][0].get<double>(), 1.0, 1e-3);
+  EXPECT_EQ(m2["clipped"][0], true);
+
+  // Acceptance 6: no project.migrate audit entry; schemaVersion is 2.
+  EXPECT_FALSE(p5_audit_has(ip, "project.migrate"));
+  EXPECT_TRUE(p5_audit_has(ip, "graph.setMixer"));
+  EXPECT_EQ(ip->doc.schemaVersion, SF_SCHEMA_VERSION);
+
+  // Acceptance 7: destroy after the e2e session is clean (stop+join+destroy
+  // all succeed; f.e cleared so the Fixture dtor does not double-free).
+  ASSERT_EQ(sf_audio_engine_stop(f.e), SF_OK);
+  ASSERT_EQ(sf_audio_engine_join(f.e), SF_OK);
+  ASSERT_EQ(sf_audio_engine_destroy(f.e), SF_OK);
+  f.e = nullptr;
+}
+
+// Acceptance 3: a mute mutation renders silence on the next tick while the
+// true-peak latch HOLDS the previous peak (non-decaying): the interpolator
+// rings the pre-mute tail into the silent block (~0.5643, above the pre-mute
+// 0.501187), and a second fully-silent block (peak 0.0) leaves the latch
+// bit-identical — the latch never decays.
+TEST(AudioEngine, E2eMuteMutationRendersSilenceAndLatchHoldsNonDecaying) {
+  Fixture f;
+  ASSERT_TRUE(f.make());
+  ASSERT_NO_FATAL_FAILURE(f.configure_default());
+  set_chain(f.p, -6.0);
+  f.io.dc = 1.0f;
+  ASSERT_EQ(sf_audio_engine_set_output(f.e, "out"), SF_OK);
+  ASSERT_EQ(sf_audio_engine_start(f.e, 0), SF_OK);
+
+  // Prime + measure the pre-mute steady state (acceptance 3 baseline).
+  for (int i = 0; i < 8; ++i) ASSERT_EQ(sf_audio_engine_tick(f.e, 256), SF_OK);
+  ASSERT_EQ(sf_audio_engine_reset_meters(f.e), SF_OK);
+  ASSERT_EQ(sf_audio_engine_tick(f.e, 256), SF_OK);
+  const double pre_mute = meter(f.e)["truePeakLinear"][0].get<double>();
+  EXPECT_NEAR(pre_mute, 0.501187, 1e-3);
+
+  // Mute mutation (gain stays -6dB; SF_MIXER_FLAG_MUTE) -> deterministic drain.
+  sf_cmd_t mute = p5_make_set_mixer("src", -6.0, SF_MIXER_FLAG_MUTE);
+  ASSERT_EQ(sf_cmd_queue_enqueue(f.q, &mute), SF_OK);
+  ASSERT_NO_FATAL_FAILURE(p5_drain(f.q, f.p));
+  auto* ip = reinterpret_cast<sfcore::SfProject*>(f.p);
+  EXPECT_EQ(ip->doc.signalGraph.nodes[0].mixer.mute, true);
+
+  // Next tick: silence at the output; latch HOLDS a peak above the pre-mute
+  // value (ring carryover), not clipped.
+  ASSERT_EQ(sf_audio_engine_tick(f.e, 256), SF_OK);
+  EXPECT_EQ(f.io.last_l[0], 0.0f);
+  const json m1 = meter(f.e);
+  EXPECT_NEAR(m1["truePeakLinear"][0].get<double>(), 0.564303, 2e-3);
+  EXPECT_GT(m1["truePeakLinear"][0].get<double>(), pre_mute);
+  EXPECT_EQ(m1["clipped"][0], false);
+  const double held = m1["truePeakLinear"][0].get<double>();
+
+  // A second fully-silent block (peak 0.0) must NOT decay the latch: the held
+  // value is bit-identical (non-decaying max latch).
+  ASSERT_EQ(sf_audio_engine_tick(f.e, 256), SF_OK);
+  EXPECT_EQ(f.io.last_l[0], 0.0f);
+  EXPECT_EQ(meter(f.e)["truePeakLinear"][0].get<double>(), held);
+}
+
+// Acceptances 4 + 5: while the engine's internal runner is RUNNING, doc-
+// touching reads reject with SF_E_IO + the verbatim "project.busy: queue
+// runner active" string (the exact sf_graph_validate call from the P4b busy
+// tests). After stop+join the handle is usable synchronously (G3 C8).
+TEST(AudioEngine, E2eReadGuardBusyWhileRunningThenSynchronousAfterJoin) {
+  Fixture f;
+  ASSERT_TRUE(f.make());
+  ASSERT_NO_FATAL_FAILURE(f.configure_default());
+  set_chain(f.p, -6.0);
+  ASSERT_EQ(sf_audio_engine_set_output(f.e, "out"), SF_OK);
+  ASSERT_EQ(sf_audio_engine_start(f.e, 0), SF_OK);
+
+  constexpr const char* kBusy = "project.busy: queue runner active";
+  char report[4096];
+  char* js = nullptr;
+  size_t jlen = 0;
+
+  // Acceptance 4: busy rejects while the internal runner is RUNNING.
+  EXPECT_EQ(sf_graph_validate(f.p, report, sizeof(report)), SF_E_IO);
+  EXPECT_STREQ(sf_last_error(nullptr), kBusy);
+  EXPECT_EQ(sf_project_to_json(f.p, &js, &jlen), SF_E_IO);
+  EXPECT_STREQ(sf_last_error(nullptr), kBusy);
+  EXPECT_EQ(js, nullptr);
+  EXPECT_EQ(sf_project_get_schema_version(f.p), -1);
+  EXPECT_STREQ(sf_last_error(nullptr), kBusy);
+
+  // Acceptance 5: after stop+join the handle is usable synchronously (C8).
+  ASSERT_EQ(sf_audio_engine_stop(f.e), SF_OK);
+  ASSERT_EQ(sf_audio_engine_join(f.e), SF_OK);
+  EXPECT_EQ(sf_project_to_json(f.p, &js, &jlen), SF_OK);
+  ASSERT_NE(js, nullptr);
+  sf_free_string(js);
+  EXPECT_EQ(sf_graph_validate(f.p, report, sizeof(report)), SF_OK);
+  EXPECT_EQ(sf_project_get_schema_version(f.p), SF_SCHEMA_VERSION);
 }
