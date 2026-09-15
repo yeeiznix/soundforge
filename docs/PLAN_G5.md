@@ -40,13 +40,13 @@ per §3.2 D2):
   no cap, no pre-size check. Document-only in `RELEASE_NOTES_G5.md`.
 - **G4-6:** Shipped code contains **no `std::atomic<double>`** — the meter is
   plain `double m_latch[2]` (true_peak.hpp:71) serialized by ONE engine mutex
-  `meter_mu` (audio_engine.cpp:98–101, SEC-G4-02(a)); torn reads are impossible.
+  `meter_mu` (audio_engine.cpp:100–102, SEC-G4-02(a)); torn reads are impossible.
   **RECLASSIFIED at gate:** P3 documents the real mechanism; the G4-6
   portability concern is defunct.
 - **G4-8:** `sf_project_destroy` (void) cannot see an attached engine in CREATED
   state — a reachable latent UAF (engine borrows `proj`; runner never started →
   nothing guards the free). **CHOSEN at gate: implement skip-free guard** at P4,
-  mirroring SEC-G3-2 (project.cpp:160–164).
+  mirroring SEC-G3-2 (project.cpp:164–172).
 - **G4-9:** `alloc_counter` replaces only default-aligned `operator new`.
   **CHOSEN at gate: add aligned overloads** at P1 (closes the zero-alloc
   assertion-evasion hole).
@@ -62,7 +62,7 @@ per §3.2 D2):
 | **Observer extension (internal)** | `native/src/core/sf_internal.hpp` (EDIT — internal C++ only) | `RunnerObserver` gains `void (*set_output)(void* user, const char* target) = nullptr;`, mirroring the existing `publish` pointer. No public header, no export, no JNI, no wire/schema change (G4 added the struct the same way). |
 | **Memory hardening** | `native/src/graph/render_plan.cpp` | **DECLINED at P0 gate** (YAGNI): OOM contained by design + fault-injection-tested; document-only in release notes. No code. |
 | **Meter serialization documentation** | `native/include/soundforge/sf_audio_engine.h` (P3, header comment) | Ship code has **no `std::atomic<double>`** — one engine mutex `meter_mu` serializes meter read/write (SEC-G4-02(a)). P3 comment documents this real mechanism (torn reads impossible; G4-6 portability concern defunct). |
-| **Project-destroy hardening** | `native/src/core/project.cpp` (P4 — chosen) | **Skip-free guard** (NOT "return SF_E_IO" — `sf_project_destroy` is void): `if (proj->audioEngine.load(acquire) != nullptr) { log ERROR; set_handle_error; return; }`, mirroring SEC-G3-2 (project.cpp:160–164). Testable via `sf_last_error` + retry-destroy-succeeds; zero ABI change. |
+| **Project-destroy hardening** | `native/src/core/project.cpp` (P4 — chosen) | **Skip-free guard** (NOT "return SF_E_IO" — `sf_project_destroy` is void): `if (proj->audioEngine.load(acquire) != nullptr) { log ERROR; set_handle_error; return; }`, mirroring SEC-G3-2 (project.cpp:164–172). Testable via `sf_last_error` + retry-destroy-succeeds; zero ABI change. |
 | **Allocator alignment** | `tests/unit/alloc_counter.cpp` (P1 amendment) | **Chosen: aligned overloads** (`operator new/delete[/]/[]` with `std::align_val_t`) — closes zero-alloc assertion-evasion; all consumers use delta assertions, no existing test flips. |
 | **Integration test** | `tests/unit/test_audio_engine.cpp` (EDIT — add live-control case) | Live output change while RUNNING, **one drain per engine session** (runner is one-shot — F2): session A `[SET_OUTPUT("out"), STOP]` → tick still targets out; session B `[SET_OUTPUT("src"), STOP]` → tick now reads src. Amplitude assertions bit-exact per F1 (see P5). No `project.migrate` entry; schemaVersion 2. |
 
@@ -200,7 +200,7 @@ typedef struct sf_cmd {
 `sf_audio_engine_s` is defined **only** in `native/src/audio/audio_engine.cpp`
 (line 73) and is *not* visible to `native/src/core/command_queue_thread.cpp`.
 The G4 `RunnerObserver` contract is explicit that `user` is *opaque — never
-dereferenced here* (`sf_internal.hpp:539`). Therefore the runner **must not**
+dereferenced here* (`sf_internal.hpp:545`). Therefore the runner **must not**
 `static_cast<sf_audio_engine_s*>(observer.user)`; doing so does not compile.
 G5 routes the retarget through the observer callback pointer instead, exactly as
 the existing `publish` pointer already routes the graph. This keeps the engine
@@ -258,8 +258,8 @@ and implement chosen lanes; none are blocking). Each hardening lane is
 |---|---|---|---|---|
 | **G4-4** | Output fixed pre-start | DONE (D1: live-control command) | Live `SF_CMD_SET_OUTPUT` completes the contract | — |
 | **G4-5** | Plan memory ~4 KB/node × 4 slots = ~16 KB/node; OOM contained via `planValid:false` + last-valid retention | **DECLINED at gate** | OOM is already contained by design and *tested* through the `CompileFn` fault-injection seam (snapshot.hpp:78–79); publish-failure restores the slot to EMPTY and the **previous READY plan stays current** (snapshot.hpp:16–18; F5). No real workload/fragmentation evidence in this env; a cap would refuse legal large docs for a hypothetical problem — YAGNI. Document-only in release notes. | none |
-| **G4-6** | (G4's text:) `std::atomic<double>` meter fields (lock-free on aarch64/x86; not portable) | **RECLASSIFIED at gate (premise false)** | Shipped code has **no `std::atomic<double>`** — meter is plain `double m_latch[2]` (true_peak.hpp:71) serialized by ONE engine `std::mutex meter_mu` (audio_engine.cpp:98–101, SEC-G4-02(a)). No generation guard exists or is needed; the mutex already prevents torn reads. P3 = comment in `sf_audio_engine.h` documenting this real mechanism; G4-6 portability concern is **defunct** (correct the residual record in `RELEASE_NOTES_G5.md`). Do NOT ship the original "atomic lock-free plus generation guard" text — it describes something that does not exist. | P3 (documentation) |
-| **G4-8** | `sf_project_destroy` cannot see an attached engine; same posture as G3 IDLE-runner hole | **CHOSEN: implement skip-free guard** | `sf_project_destroy` is `void` (project.cpp:153) — "returns `SF_E_IO`" is **unimplementable** (F4). Signature-preserving variant mirroring SEC-G3-2 (project.cpp:160–164): `if (proj->audioEngine.load(std::memory_order_acquire) != nullptr) { log ERROR; set_handle_error; return; }`. Safe: the engine's CAS claim is released in `sf_audio_engine_destroy` before the engine free (audio_engine.cpp:351–354). Testable via `sf_last_error` + retry-destroy-succeeds; zero ABI change. | P4 (hardening) |
+| **G4-6** | (G4's text:) `std::atomic<double>` meter fields (lock-free on aarch64/x86; not portable) | **RECLASSIFIED at gate (premise false)** | Shipped code has **no `std::atomic<double>`** — meter is plain `double m_latch[2]` (true_peak.hpp:71) serialized by ONE engine `std::mutex meter_mu` (audio_engine.cpp:100–102, SEC-G4-02(a)). No generation guard exists or is needed; the mutex already prevents torn reads. P3 = comment in `sf_audio_engine.h` documenting this real mechanism; G4-6 portability concern is **defunct** (correct the residual record in `RELEASE_NOTES_G5.md`). Do NOT ship the original "atomic lock-free plus generation guard" text — it describes something that does not exist. | P3 (documentation) |
+| **G4-8** | `sf_project_destroy` cannot see an attached engine; same posture as G3 IDLE-runner hole | **CHOSEN: implement skip-free guard** | `sf_project_destroy` is `void` (project.cpp:153) — "returns `SF_E_IO`" is **unimplementable** (F4). Signature-preserving variant mirroring SEC-G3-2 (project.cpp:164–172): `if (proj->audioEngine.load(std::memory_order_acquire) != nullptr) { log ERROR; set_handle_error; return; }`. Safe: the engine's CAS claim is released in `sf_audio_engine_destroy` before the engine free (audio_engine.cpp:368–374). Testable via `sf_last_error` + retry-destroy-succeeds; zero ABI change. | P4 (hardening) |
 | **G4-9** | `alloc_counter` replaces only default-aligned `operator new`; over-aligned allocations evade the zero-alloc assertion | **CHOSEN: implement aligned overloads** | Add `operator new(size_t, std::align_val_t)` + `operator delete(void*, std::align_val_t)` (+ `[]` variants) to the counter — 4 tiny functions, test-only file. All consumers use delta assertions (test_render_plan.cpp:283–295, test_true_peak.cpp:159–166) and no hot path uses over-aligned types today → no existing test flips; the zero-alloc contracts then hold against future over-aligned types. Comment-only would leave a silent hole. | P1 (amendment; tiny patch) |
 
 ### 3.3 D3 — Command interception: where to add the `SF_CMD_SET_OUTPUT` case
@@ -474,7 +474,7 @@ JNI grep stays **26** (no new JNI). pytest unchanged in count (version string on
 - **Acceptance:**
   - Fixture: extend `set_chain` with an out-gain variant — `src(-6 dB) → out(+6 dB)`
     so the two targets differ observably. Per render semantics every node block
-    has its gain applied (render_plan.cpp:152–156), so: target `out` renders
+    has its gain applied (render_plan.cpp:161–162), so: target `out` renders
     input(1.0) × src-gain(10^(-6/20)) × out-gain(10^(+6/20)) = 0.501187 × 1.995262
     ≈ **1.0**; target `src` renders the src block **0.501187**. Both @1e-6.
   - **Live-control test (two engine sessions — the runner is one-shot, F2):**
@@ -626,10 +626,10 @@ landed in `docs(g5): gate amendments`:
 
 | ID | Sev | Finding | Amendment landed |
 |---|---|---|---|
-| **ORC-G5-01** (F1) | HIGH | Amplitudes in P5 acceptance wrong: `-6 dB → 0.5` is `10^(-6/20) = 0.501187`; retarget to `src` is NOT `1.0` — every node block has its own gain applied (render_plan.cpp:152–156), so `src` renders `0.501187` identical to `out` (retarget unobservable) | P5/§6.1 rewritten: fixture `out(+6 dB)` → `out`≈1.0 vs `src`→0.501187, both @1e-6 |
-| **ORC-G5-02** (F2) | HIGH | Two STOP-barrier drains impossible — the runner is one-shot (command_queue_thread.cpp:220–224, 243–248; nothing resets STOPPED) | P5/§6.1 rewritten: **two engine sessions**, one drain each; same-target leg in session A, retarget leg in session B |
-| **ORC-G5-03** (F3) | HIGH | G4-6 premise false: no `std::atomic<double>` anywhere in `native/`; meter is `double m_latch[2]` + ONE `meter_mu` mutex (SEC-G4-02(a)); no generation guard exists. The planned P3 comment would document a non-existent mechanism | P3 rewritten: comment documents mutex serialization (true_peak.hpp:71, audio_engine.cpp:98–101); G4-6 reclassified/superseded; residual record corrected |
-| **ORC-G5-04** (F4) | MED | "returns `SF_E_IO`" unimplementable — `sf_project_destroy` is `void` (project.cpp:153) and §2 KEEP forbids signature change | P4 rewritten: skip-free guard mirroring SEC-G3-2 (project.cpp:160–164: log + set_handle_error + return), zero ABI change, tested via `sf_last_error` + retry |
+| **ORC-G5-01** (F1) | HIGH | Amplitudes in P5 acceptance wrong: `-6 dB → 0.5` is `10^(-6/20) = 0.501187`; retarget to `src` is NOT `1.0` — every node block has its own gain applied (render_plan.cpp:161–162), so `src` renders `0.501187` identical to `out` (retarget unobservable) | P5/§6.1 rewritten: fixture `out(+6 dB)` → `out`≈1.0 vs `src`→0.501187, both @1e-6 |
+| **ORC-G5-02** (F2) | HIGH | Two STOP-barrier drains impossible — the runner is one-shot (command_queue_thread.cpp:240–244, 263–266; nothing resets STOPPED) | P5/§6.1 rewritten: **two engine sessions**, one drain each; same-target leg in session A, retarget leg in session B |
+| **ORC-G5-03** (F3) | HIGH | G4-6 premise false: no `std::atomic<double>` anywhere in `native/`; meter is `double m_latch[2]` + ONE `meter_mu` mutex (SEC-G4-02(a)); no generation guard exists. The planned P3 comment would document a non-existent mechanism | P3 rewritten: comment documents mutex serialization (true_peak.hpp:71, audio_engine.cpp:100–102); G4-6 reclassified/superseded; residual record corrected |
+| **ORC-G5-04** (F4) | MED | "returns `SF_E_IO`" unimplementable — `sf_project_destroy` is `void` (project.cpp:153) and §2 KEEP forbids signature change | P4 rewritten: skip-free guard mirroring SEC-G3-2 (project.cpp:164–172: log + set_handle_error + return), zero ABI change, tested via `sf_last_error` + retry |
 | **ORC-G5-05** (F5) | MED | "compile failure → silence" contradicts store semantics: publish failure restores slot to EMPTY, **previous READY plan stays current** (snapshot.hpp:16–18); only never-published store or unknown target yields silence | G4-5 declined (YAGNI) so no test text remains; P2 rewritten as no-code; G5-1 residual documents retained-last-valid semantics |
 | ORC-G5-06 (F6) | LOW | Version stamp surfaces verified complete/correct (CMakeLists.txt:13, sf_version.h:17, version.cpp:8, version_gen.h.in, `__init__.py:11`, migrate.py:18) | No fix — P5 keeps two-cache reconfigure |
 | ORC-G5-07 (F7) | LOW | `test_cmd_queue.cpp` optional case low-value | Accepted as optional; §6.1 marks KEEP |

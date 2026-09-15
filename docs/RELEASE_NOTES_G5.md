@@ -35,7 +35,7 @@ reclassifies one (G4-6 — premise false), and declines one (G4-5 — YAGNI):
 
 - **Meter serialization documented** (G4-6, P3): Shipped code contains **no**
   `std::atomic<double>` — meter is plain `double m_latch[2]` (true_peak.hpp:71)
-  guarded by ONE engine `std::mutex meter_mu` (audio_engine.cpp:98–101,
+  guarded by ONE engine `std::mutex meter_mu` (audio_engine.cpp:100–102,
   SEC-G4-02(a)); no generation guard exists or is needed. P3 documents this real
   mechanism; the G4-6 portability concern is **defunct** (premise false).
 
