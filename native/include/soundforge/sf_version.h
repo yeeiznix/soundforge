@@ -13,8 +13,8 @@ extern "C" {
 #define SF_ENGINE_VERSION_MINOR 1
 #define SF_ENGINE_VERSION_PATCH 0
 /* Gate suffix. Gate history: "-g1" (G1); the planned G2 bump to "-g2" never
-   landed, so G3 lands "-g3" directly (PLAN_G3 §5.3). */
-#define SF_ENGINE_VERSION_SUFFIX "-g3"
+   landed, so G3 landed "-g3" directly and G4 lands "-g4" (PLAN_G3/G4 §5.3). */
+#define SF_ENGINE_VERSION_SUFFIX "-g4"
 #define SF_SCHEMA_VERSION 2
 
 /* Default engine version string derived from the components above.
@@ -25,7 +25,7 @@ extern "C" {
   SF_STR(SF_ENGINE_VERSION_MAJOR) "." SF_STR(SF_ENGINE_VERSION_MINOR) "." \
   SF_STR(SF_ENGINE_VERSION_PATCH) SF_ENGINE_VERSION_SUFFIX
 
-/* Static string, e.g. "0.1.0-g3" (build stamp via CMake version_gen.h). */
+/* Static string, e.g. "0.1.0-g4" (build stamp via CMake version_gen.h). */
 const char* sf_engine_version(void);
 
 /* Current canonical schema version, e.g. 1. */

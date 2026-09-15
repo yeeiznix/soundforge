@@ -129,7 +129,9 @@ soundforge/
 ├── tests/
 │   └── unit/
 │       ├── CMakeLists.txt                  # EDIT — + 4 new test files
-│       ├── test_dsp_render.cpp             # EDIT — G3 cases unchanged + planned-path equivalence
+│       ├── alloc_counter.hpp               # NEW  — shared counting allocator (test-only; ORC-G4-01)
+│       ├── alloc_counter.cpp               # NEW  — replaces global operator new/new[] once per binary
+│       ├── test_dsp_render.cpp             # EDIT (declared) — INTENTIONALLY UNCHANGED; see note below (ORC-G4-02)
 │       ├── test_render_plan.cpp            # NEW  — plan compile/execute, zero-alloc hot path
 │       ├── test_true_peak.cpp              # NEW  — 4× oversampling, +3.01 dB, latch, reset
 │       ├── test_snapshot.cpp               # NEW  — 4-slot handoff, single-writer/single-reader
@@ -487,6 +489,12 @@ bool render_chain_planned(const RenderPlan& plan, AudioBlock& block,
   by index; the accumulated float sum is therefore bit-identical (same operand
   order). This is the argument P1 must pin with an explicit G3-vs-planned
   equivalence test (≤1e-12) over *every* existing `test_dsp_render` case.
+  - **ORC-G4-04 (discharged P6/docs — comment-level disposition).** The
+    `preds[i]` build (`render_plan.cpp:85-93`) would, for a self-loop edge
+    (`fromNodeId == toNodeId`), push `i` itself as a predecessor — but that is a
+    **dead corner**: `topological_order` rejects a self-loop as a cycle
+    (`render_plan.cpp:25` returns `false` before `preds` is built), so
+    `preds[i] == i` is unreachable. No code change; documented here.
 - `render_chain_planned` walks `plan.nodes` in order, accumulates predecessors
   via `preds`, applies gate/gain/pan — the exact G3 semantics, zero allocations.
   It must not call `topological_order`, `find_node`, or allocation (asserted by
@@ -675,7 +683,8 @@ tests build graphs **in memory** (no new fixture files) or reuse
 ### 5.3 Version stamp
 
 G4 lands **`0.1.0-g4`** (suffix-tag convention, G3 §5.3 precedent):
-`sf_version.h` suffix, `native/CMakeLists.txt` default, python `__version__` +
+`sf_version.h` suffix (`SF_ENGINE_VERSION_SUFFIX`, the macro `SF_ENGINE_VERSION`
+derives), `native/CMakeLists.txt` default, python `__version__` +
 `ENGINE_VERSION`, and **both reconfigured caches**:
 
 ```bash
@@ -683,8 +692,12 @@ cmake -U SF_BUILD_VERSION -DSF_BUILD_VERSION=0.1.0-g4 native/build
 cmake -U SF_BUILD_VERSION -DSF_BUILD_VERSION=0.1.0-g4 native/build-asan
 ```
 
-`SF_SCHEMA_VERSION` stays **2**; `sf_is_compatible` unchanged. *(Resolved in
-§10.3 Q1: the bump is in scope — suffix-only, no wire change.)*
+The non-CMake fallback (`native/src/core/version.cpp`) and the build-stamp
+template comment (`native/src/core/version_gen.h.in`) are bumped in lockstep, as
+in G3; `app/src/main/cpp/CMakeLists.txt` is **KEEP** (Android, `-g0` historical,
+`app/**` untouched). `SF_SCHEMA_VERSION` stays **2**; `sf_is_compatible`
+unchanged. *(Resolved in §10.3 Q1: the bump is in scope — suffix-only, no wire
+change.)*
 
 ### 5.4 Diagnostics & logging deltas (existing `sf_log` ring)
 
@@ -720,9 +733,18 @@ string only).
   `native/src/graph/CMakeLists.txt` (EDIT — + render_plan.cpp),
   `native/src/graph/dsp_render.cpp` (EDIT — `render_chain` = compile + planned),
   `native/src/graph/graph_internal.hpp` (EDIT — decl),
-  `tests/unit/test_render_plan.cpp` (NEW),
-  `tests/unit/test_dsp_render.cpp` (EDIT — add planned-path equivalence cases),
-  `tests/unit/CMakeLists.txt` (EDIT).
+  `tests/unit/test_render_plan.cpp` (NEW), `tests/unit/alloc_counter.hpp`,
+  `tests/unit/alloc_counter.cpp` (NEW — shared counting allocator; ORC-G4-01),
+  `tests/unit/test_dsp_render.cpp` (EDIT — *declared*; **finally untouched**,
+  see note), `tests/unit/CMakeLists.txt` (EDIT).
+- **Note (ORC-G4-02, discharged P6/docs):** `test_dsp_render.cpp` was declared
+  EDIT for per-case planned-path equivalence, but landed **unchanged** — the
+  equivalence seam is proven instead through the facade: `dsp_render.cpp:40-45`
+  (`render_chain` = `compile_render_plan` + `render_chain_planned`, unmodified
+  G3 signature/semantics) runs every existing G3 `Render.*` case through the
+  planned path, and `test_render_plan.cpp` adds planned value tests plus the
+  structural operand-order identity (D4/preds accumulation in edge document
+  order). The planned path is exercised for every G3 case by construction.
 - **Acceptance:** every existing G3 `test_dsp_render` case passes **unmodified**;
   `render_chain_planned` produces identical output to G3 `render_chain` for the
   same graph (relative tolerance ≤1e-12) — the operand-order argument in D4 must
@@ -830,14 +852,17 @@ string only).
 ### P6 — Docs + DoD sweep + tag (Lane All, ½ day)
 - **Goal:** gate artifact.
 - **Files:** `docs/RELEASE_NOTES_G4.md` (NEW), this plan finalized
-  (§10.4 verdicts already recorded), version bump `0.1.0-g4` applied + both
-  caches reconfigured.
+  (§10.4 verdicts recorded + finding-discharge table added), version bump
+  `0.1.0-g4` applied + both caches reconfigured.
 - **Acceptance:** full §7.5 suite green: ctest reg + UBSan, pytest, drift empty,
   grep **26**, `-R Version` reports `0.1.0-g4`; §10.4 verdict table every
   finding discharged or re-deferred with a residual (G4-7 records the
-  independent-reviewer process item); tag `g4-complete`.
+  independent-reviewer process item); `docs/RELEASE_NOTES_G4.md` records the
+  evidence table + ORC-G4-02/05 comparison-pair limitation + version-stamp
+  surface; tag `g4-complete`.
 - **Validation:** evidence table in release notes (G3 style). **Commit:**
-  `p6(g4): release notes + DoD sweep; tag g4-complete`
+  `p6(g4): release notes + DoD sweep; version 0.1.0-g4` (no tag — the
+  orchestrator tags `g4-complete` after the independent final audit).
 
 ---
 
@@ -851,7 +876,7 @@ string only).
 
 | File | Notable cases |
 |---|---|
-| `test_render_plan.cpp` (NEW, ≈10) | compile topo order; per-node gain/pan/exclusion values match G3 computation; planned execute == G3 `render_chain` (≤1e-12); DC −6 dB → half amplitude; mute/solo exclusion; empty graph identity; unknown target silence+false; pan==0 passthrough; **no-allocation** assertion on the execute path (source scan + a counting-allocator or `malloc`-hook); compile-failure path safe. |
+| `test_render_plan.cpp` (NEW, ≈10) | compile topo order; per-node gain/pan/exclusion values match G3 computation; planned execute == G3 `render_chain` (≤1e-12); DC −6 dB → half amplitude; mute/solo exclusion; empty graph identity; unknown target silence+false; pan==0 passthrough; **no-allocation** assertion on the execute path (source scan + a counting-allocator or `malloc`-hook); compile-failure path safe. **ORC-G4-05 (discharged P6/docs):** the `ExecuteMatchesG3RenderChainBitForBit` test compares the *planned* path against the `render_chain` facade — and since the facade is now literally `compile_render_plan` + `render_chain_planned` (`dsp_render.cpp:40-45`), it is the same path twice. It is retained as the G3-contract regression (the facade is what G3 callers use); the real cross-path proof is the 8 untouched `test_dsp_render` `Render.*` G3 cases (bit-exact G3 expectations vs the facade) plus the direct planned value tests in this file. |
 | `test_true_peak.cpp` (NEW, ≈12) | fs/4 + π/4 sine → +3.01 dB ±0.1; DC unity ±1e-4; multi-block hold (tail); latch monotone; reset → 0; silence → 0/`null`/not-clipped; full-scale → clipped; ±1e30 finite; determinism ≤1e-12; per-channel independence (L silent, R loud); block-size invariance of the *latch* (512×1 vs 64×8). |
 | `test_snapshot.cpp` (NEW, ≈11) | publish into EMPTY; reclaim oldest READY; reader acquires newest; reader keeps plan when no READY; release/reclaim; stress writer vs reader (no torn plan, newest not lost, **writer never spins**); `seq` monotone; compile-failure restores EMPTY (last valid plan retained); 4-slot bound holds under many publishes. |
 | `test_audio_engine.cpp` (NEW, ≈20) | lifecycle + one-shot + misuse errors; create-requires-IDLE; configure/set_output pre-start only; tick bounds + not-running reject; deterministic render + meter; `meter_json` schema/keys/`null`; `reset_meters`; `last_report` passthrough + before-evaluate `SF_E_IO`; PACE pacer advances + stop/join bounded; destroy auto-join; engine+runner end-to-end mutations (P5): gain change, mute holds latch, read-guard still rejects, post-join sync use; JNI grep 26; UBSan clean. |
@@ -1023,6 +1048,32 @@ residuals table.
 | B-4 | LOW | `meter_json` buffer contract (cap=0, tiny cap, null term) was unspecified. | P4 acceptance + E-R-D note: `SF_E_NOMEM` on too-small cap, never over-write, null-terminate. **SEC-G4-01 (security gate, mandatory before P4):** split error codes (NULL `e`/`buf`/`cap==0` → `SF_E_INVALID_ARG` matching `sf_queue_runner_last_report`; too-small `cap>0` → `SF_E_NOMEM` + `buf[0]='\0'`, never a truncated payload); bounded local serialization with one sized copy; locale-independent formatting (`std::to_chars`-style, never `%g`/`%f` under comma-decimal locale). Full contract now in §4.3 |
 | B-5 | LOW | `planValid` observability flag was only prose ("an observable meter/status flag"). | Added to the D3 JSON shape and P4 acceptance. |
 | B-6 | LOW | G4 test-count estimate (~45, 232→~277) is an estimate; the true count is set by gtest-discovered cases. | §8 keeps "≈" and the evidence-first rule (growth is fine). |
+
+**Finding discharge record (P6 finalization).** All gate-review findings are
+discharged with their discharging phase. The "docs (P6)" rows are documentation
+amendments only — the codepaths already landed and were tested in the phase
+listed in the middle column.
+
+| Finding | Sev | Topic | Discharged in | Disposition |
+|---|---|---|---|---|
+| ORC-G4-01 | LOW | `alloc_counter.{hpp,cpp}` absent from plan §2/P1 file lists | **P6 (docs)** | Added to §2 and the P1 file list (files: `tests/unit/alloc_counter.{hpp,cpp}`, NEW, test-only) |
+| ORC-G4-02 | LOW | `test_dsp_render.cpp` declared EDIT but untouched | **P6 (docs)** | P1 note + §2 row: intentionally unchanged; equivalence proven via the facade (`dsp_render.cpp:40-45`) + planned value tests + structural operand-order identity |
+| ORC-G4-03 (=SEC-G4-03) | MED | publish-path compile containment (incl. `topological_order`) + cycle/OOM tests | **P3** | Whole compile wrapped in `catch(...)` → slot restored `EMPTY` first, last-valid retained; cycle + injected-OOM tests; 4×-OOM exhaustion pin |
+| ORC-G4-04 | LOW | self-loop `preds[i]==i` dead corner | **P6 (docs)** | Comment-level disposition in §4.4 (D4): `topological_order` rejects self-loops as cycles → unreachable; no code change |
+| ORC-G4-05 | LOW | `ExecuteMatchesG3RenderChainBitForBit` compares facade-vs-planned (same path twice) | **P6 (docs)** | §7.1 note: retained as G3-contract regression; cross-path proof is the 8 untouched G3 `Render.*` cases + direct planned value tests |
+| ORC-G4-06 | LOW | configured-empty output target = valid silence | **P4** | Engine treats `""`/NULL target as compiled-out (`out_index==-1`) + valid silence; tested |
+| SEC-G4-01 | MED | `meter_json` buffer/error-code contract | **P4** | NULL `e`/`buf`/`cap==0` → `SF_E_INVALID_ARG`; too-small `cap>0` → `SF_E_NOMEM` + `buf[0]='\0'`; bounded `to_chars` serialize + null-term; locale test (`GTEST_SKIP` in proot) |
+| SEC-G4-02 | MED | meter sync layer (single-thread `TruePeak`) | **P4** | Single engine mutex around process/latch/reset + `meter_json`/`reset_meters`; no kernel locks; PACE-vs-`meter_json` test under UBSan |
+| SEC-G4-04 | LOW | defensive `block.n > kBlockMaxSamples` guard | **P4** | Entry guard in `render_chain_planned` + engine tick both-edge (`frames` 0/513) tests |
+| SEC-G4-05 | LOW (listed blocking) | `start` ordered gate + snapshot-#0 rollback | **P4** | runnerState gate before compile, observer attach, full rollback (stop+join, `SF_E_IO`, restore CREATED), `ORC-G4P4-01` rollback-store null fix |
+| SEC-G4-06 (=G4-8) | LOW | `sf_project_destroy` cannot see an attached engine | **P4 (documented)** | `sf_audio_engine.h` + §4.5: engine destroy is mandatory before project destroy; posture parity with the G3 IDLE-runner hole |
+| SEC-G4-07 (=G4-9) | LOW | `alloc_counter` default-aligned only | **P1 (comment) / P6 (docs)** | Documented default-alignment precondition; test-only, no production target references |
+| SEC-G4-08 (=G4-5) | LOW | plan memory bound | **P6 (docs)** | §10.2 G4-5: 4 plans × N × ~4 KB; `planValid:false` + last-valid retention is the OOM contract |
+| SEC-G4-09 (=G4-10) | LOW | callback error/rollback paths | **P4** | `io.read` non-OK → silence; `io.write` non-OK → block skipped; throwing callback contained; pacer-spawn failure → stop+join + `SF_E_IO` + restore CREATED |
+| SEC-G4-10 | LOW | `destroy(NULL)` / claim-release ordering | **P4** | `destroy(NULL)` = no-op; double-destroy documented UB; claim released before/independent of free |
+| ORC-G4P3-01/02/03 | — | catch-handler allocation, real-store observer test, tautological seq assert | **P3** | EMPTY-restore-first + no-alloc handlers; real-store-as-observer test; multiset `{2,3,4,5}` check |
+| ORC-G4P4-01/02 (+03/04/05) | — | rollback store null, plan entry bound, tick(513), locale, standalone-runner | **P4** | All discharged in the P4 fixer pass |
+| ORC-G4P5-01 | LOW | settle `clipped` margin on 4.4e-8 coeff | **P5** | Non-blocking; deterministic, documented in `RELEASE_NOTES_G4.md` residuals |
 
 **Overall verdict:** **APPROVE to start P1, with the R-A/R-B/R-D amendments
 applied** (they are now inlined above). No unresolved HIGH finding remains:

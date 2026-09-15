@@ -13,9 +13,9 @@ from datetime import datetime, timezone
 
 # Mirrors sf_engine_version() / SF_VERSION_STRING (sf_version.h): the engine
 # version stamped into documents that this code migrates.
-# Gate history (PLAN_G3 §5.3): the planned G2 "-g2" bump never landed; G3 lands
-# "-g3" directly.
-ENGINE_VERSION = "0.1.0-g3"
+# Gate history (PLAN_G3/G4 §5.3): the planned G2 "-g2" bump never landed; G3
+# lands "-g3" directly; G4 lands "-g4".
+ENGINE_VERSION = "0.1.0-g4"
 
 # Room defaults for schema v2 — mirrors SF_ROOM_DEFAULT_* (sf_internal.hpp and
 # migration.cpp, step 1->2). MUST stay in lockstep with the native side.
