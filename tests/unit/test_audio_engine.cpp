@@ -60,6 +60,18 @@ void set_chain(sf_project_t* p, double src_db) {
   ip->doc.signalGraph.edges.push_back(mk_edge("src", "out"));
 }
 
+// src(src_db) -> out(out_db), for live-control test with two observable targets
+// (each node block applies its own gain; src(-6dB)->out(+6dB) yields src≈0.501187,
+// out≈1.0, both @1e-6 per the amended P5 acceptance).
+void set_chain_gains(sf_project_t* p, double src_db, double out_db) {
+  auto* ip = reinterpret_cast<sfcore::SfProject*>(p);
+  ip->doc.signalGraph.nodes.clear();
+  ip->doc.signalGraph.edges.clear();
+  ip->doc.signalGraph.nodes.push_back(mk_node("src", sfcore::SfNodeSource, src_db));
+  ip->doc.signalGraph.nodes.push_back(mk_node("out", sfcore::SfNodeOutput, out_db));
+  ip->doc.signalGraph.edges.push_back(mk_edge("src", "out"));
+}
+
 // A cyclic graph must be injected directly: add_edge_impl rejects cycles.
 void set_cycle(sf_project_t* p) {
   auto* ip = reinterpret_cast<sfcore::SfProject*>(p);
@@ -1117,4 +1129,113 @@ TEST(AudioEngine, SetOutputCommandUnterminatedIdDrainsSafely) {
   EXPECT_EQ(ip->doc.auditLog.size(), audit_before);
   EXPECT_FALSE(p5_audit_has(ip, "project.migrate"));
   EXPECT_EQ(ip->doc.schemaVersion, SF_SCHEMA_VERSION);
+}
+
+// ---------------------------------------------------------------------------
+// G5 P5 — live-control end-to-end: SF_CMD_SET_OUTPUT retargets while RUNNING
+// (PLAN_G5 §6.1 amended acceptance: two engine sessions, one drain each)
+// ---------------------------------------------------------------------------
+
+// Session A (target unchanged): benign same-target retarget renders the output
+// node block with its own gain; the latch is still live (observes gain advance).
+TEST(AudioEngine, LiveControlSameTargetRetargetBenign) {
+  Fixture f;
+  ASSERT_TRUE(f.make());
+  ASSERT_NO_FATAL_FAILURE(f.configure_default());
+
+  // Fixture: src(-6 dB) -> out(+6 dB). Target "out" renders input × src-gain ×
+  // out-gain = 1.0 × 0.501187 × 1.995262 ≈ 1.0 (both @1e-6 per F1).
+  set_chain_gains(f.p, -6.0, 6.0);  // 10^(-6/20) × 10^(+6/20) ≈ 1.0
+  f.io.dc = 1.0f;
+  ASSERT_EQ(sf_audio_engine_set_output(f.e, "out"), SF_OK);
+  ASSERT_EQ(sf_audio_engine_start(f.e, 0), SF_OK);
+
+  // Prime + measure steady state (target "out").
+  for (int i = 0; i < 8; ++i) ASSERT_EQ(sf_audio_engine_tick(f.e, 256), SF_OK);
+  ASSERT_EQ(sf_audio_engine_reset_meters(f.e), SF_OK);
+  ASSERT_EQ(sf_audio_engine_tick(f.e, 256), SF_OK);
+
+  // Session A: same-target retarget (out -> out) via SF_CMD_SET_OUTPUT.
+  sf_cmd_t set_out{};
+  set_out.type = SF_CMD_SET_OUTPUT;
+  std::strncpy(set_out.id1, "out", sizeof(set_out.id1) - 1);
+  ASSERT_EQ(sf_cmd_queue_enqueue(f.q, &set_out), SF_OK);
+  ASSERT_NO_FATAL_FAILURE(p5_drain(f.q, f.p));
+
+  // Next tick: still targets "out", still ≈1.0.
+  ASSERT_EQ(sf_audio_engine_tick(f.e, 256), SF_OK);
+  EXPECT_NEAR(f.io.last_l[0], 1.0f, 1e-6f);
+  EXPECT_NEAR(f.io.last_r[0], 1.0f, 1e-6f);
+  const json ma = meter(f.e);
+  EXPECT_NEAR(ma["truePeakLinear"][0].get<double>(), 1.0, 1e-3);
+  EXPECT_NEAR(ma["truePeakLinear"][1].get<double>(), 1.0, 1e-3);
+
+  // Control command: no mutation -> no audit entry, no schema change.
+  auto* ip = reinterpret_cast<sfcore::SfProject*>(f.p);
+  EXPECT_FALSE(p5_audit_has(ip, "project.migrate"));
+  EXPECT_EQ(ip->doc.schemaVersion, SF_SCHEMA_VERSION);
+
+  ASSERT_EQ(sf_audio_engine_stop(f.e), SF_OK);
+  ASSERT_EQ(sf_audio_engine_join(f.e), SF_OK);
+  ASSERT_EQ(sf_audio_engine_destroy(f.e), SF_OK);
+  f.e = nullptr;
+}
+
+// Session B (retarget observable): live output retarget from "out" to "src"
+// changes the rendered amplitude; the meter advances to track the new target.
+// The latch is non-decaying, so we reset it between measuring targets.
+TEST(AudioEngine, LiveControlRetargetObservableAmplitudeAndMeterAdvance) {
+  // Fresh engine for session B retarget observable test.
+  Fixture f;
+  ASSERT_TRUE(f.make());
+  ASSERT_NO_FATAL_FAILURE(f.configure_default());
+
+  // Fixture: src(-6 dB) -> out(+6 dB). Target "out" ≈1.0, target "src" ≈0.501187.
+  set_chain_gains(f.p, -6.0, 6.0);
+  f.io.dc = 1.0f;
+  ASSERT_EQ(sf_audio_engine_set_output(f.e, "out"), SF_OK);
+  ASSERT_EQ(sf_audio_engine_start(f.e, 0), SF_OK);
+
+  // Prime + measure initial state (target "out" ≈ 1.0).
+  for (int i = 0; i < 8; ++i) ASSERT_EQ(sf_audio_engine_tick(f.e, 256), SF_OK);
+  ASSERT_EQ(sf_audio_engine_reset_meters(f.e), SF_OK);
+  ASSERT_EQ(sf_audio_engine_tick(f.e, 256), SF_OK);
+
+  const json m_before = meter(f.e);
+  EXPECT_NEAR(m_before["truePeakLinear"][0].get<double>(), 1.0, 1e-3);
+
+  // Retarget from "out" to "src" via SF_CMD_SET_OUTPUT.
+  sf_cmd_t set_src{};
+  set_src.type = SF_CMD_SET_OUTPUT;
+  std::strncpy(set_src.id1, "src", sizeof(set_src.id1) - 1);
+  ASSERT_EQ(sf_cmd_queue_enqueue(f.q, &set_src), SF_OK);
+  ASSERT_NO_FATAL_FAILURE(p5_drain(f.q, f.p));
+
+  // Next tick: now targets "src", renders ≈0.501187. The interpolator may ring
+  // from the out-gain tail on the first transition block, so we tick again.
+  // Then reset meters (tails kept) to clear the transient peak.
+  ASSERT_EQ(sf_audio_engine_tick(f.e, 256), SF_OK);
+  ASSERT_EQ(sf_audio_engine_tick(f.e, 256), SF_OK);
+  ASSERT_EQ(sf_audio_engine_reset_meters(f.e), SF_OK);
+  ASSERT_EQ(sf_audio_engine_tick(f.e, 256), SF_OK);
+
+  const float expect_src = static_cast<float>(std::pow(10.0, -6.0 / 20.0));
+  EXPECT_NEAR(f.io.last_l[0], expect_src, 1e-6f);
+  EXPECT_NEAR(f.io.last_r[0], expect_src, 1e-6f);
+
+  // Latch now measures the settled target: peak ≈0.501187; the latch now tracks
+  // the source target after the retarget.
+  const json m_after = meter(f.e);
+  EXPECT_NEAR(m_after["truePeakLinear"][0].get<double>(), 0.501187, 1e-3);
+  EXPECT_NEAR(m_after["truePeakLinear"][1].get<double>(), 0.501187, 1e-3);
+
+  // Control command: no mutation -> no audit entry, no schema change.
+  auto* ip = reinterpret_cast<sfcore::SfProject*>(f.p);
+  EXPECT_FALSE(p5_audit_has(ip, "project.migrate"));
+  EXPECT_EQ(ip->doc.schemaVersion, SF_SCHEMA_VERSION);
+
+  ASSERT_EQ(sf_audio_engine_stop(f.e), SF_OK);
+  ASSERT_EQ(sf_audio_engine_join(f.e), SF_OK);
+  ASSERT_EQ(sf_audio_engine_destroy(f.e), SF_OK);
+  f.e = nullptr;
 }

@@ -4,8 +4,8 @@
 #if __has_include("version_gen.h")
 #include "version_gen.h"
 #else
-// Fallback for non-CMake builds (PLAN_G3/G4 §5.3: miss G2 "-g2", land "-g4").
-#define SF_VERSION_STRING "0.1.0-g4"
+// Fallback for non-CMake builds (PLAN_G5 §4.2: miss G2 "-g2", land "-g3"→"-g4"→"-g5").
+#define SF_VERSION_STRING "0.1.0-g5"
 #endif
 
 extern "C" const char* sf_engine_version(void) { return SF_VERSION_STRING; }
