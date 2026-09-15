@@ -730,8 +730,11 @@ string only).
   empty graph → identity; unknown target → silence + `false`; pan==0 passthrough;
   the hot execute path proves no allocation both by source scan (`std::map`/`new`
   absent from the execute loop) **and** an allocation-counter/`malloc`-hook;
-  compile failure (OOM simulation / unknown target) restores EMPTY and leaves the
-  last valid plan current (no null overwrite, no WRITING leak).
+  compile failure (OOM simulation / cycle) restores EMPTY and leaves the
+  last valid plan current (no null overwrite, no WRITING leak). Unknown target
+  is NOT a compile failure (D4: compiles with out_index=-1) — it is a
+  render-failure (silence + `false`); only genuine compile failures (cycle /
+  OOM / exception) exercise the EMPTY-restore path.
 - **Validation:** host ctest (reg + UBSan).
 - **Commit:** `p1(g4): RenderPlan preallocated pool + render_chain_planned (dsp_render seam)`
 
@@ -791,9 +794,10 @@ string only).
   `SF_E_IO`; `frames` bounds; channels≠2 → `SF_E_INVALID_ARG`; deterministic tick
   renders a known graph (input DC → output scale matches the law) and the meter
   reports the expected peak; `reset_meters` zeroes; `meter_json` is valid JSON
-  with the documented keys and `null` dB when silent; `meter_json` with cap=0 and
-  a too-small cap returns `SF_E_NOMEM` and never writes past the buffer (null
-  termination asserted); `last_report` passthrough returns the runner's report
+  with the documented keys and `null` dB when silent; `meter_json` NULL `e`/`buf`
+  or `cap==0` → `SF_E_INVALID_ARG`, too-small `cap>0` → `SF_E_NOMEM` **and
+  `buf[0]='\0'`** (never writes past the buffer, never truncated payload; null
+  termination asserted — SEC-G4-01 contract in §4.3); `last_report` passthrough returns the runner's report
   byte-identically and `SF_E_IO` before any evaluate; PACE start spawns a pacer
   that advances `blocksRendered` and stop/join reaps it within bounded time (no
   deadlock); `tick` while PACE is active → `SF_E_IO`; destroy requires

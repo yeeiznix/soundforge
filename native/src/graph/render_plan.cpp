@@ -110,6 +110,15 @@ bool compile_render_plan(const SignalGraphDoc& g, const std::string& out_node_id
 }
 
 bool render_chain_planned(RenderPlan& plan, AudioBlock& block, std::string& err) {
+  // SEC-G4-04 defensive entry bound (ORC-G4P4-02): reject an oversized block
+  // before the empty-plan fast-path and before any per-node scratch write. The
+  // engine tick already bounds frames; this is mandated defense-in-depth for
+  // direct callers of the render seam.
+  if (block.n > kBlockMaxSamples) {
+    err = "render_plan: block exceeds max";
+    return false;
+  }
+
   const std::size_t n = block.n;
 
   // Empty graph: nothing to process — the block passes through unchanged

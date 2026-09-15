@@ -169,6 +169,24 @@ TEST(RenderPlan, ExecuteMinusSixDbIsHalfAmplitude) {
   }
 }
 
+TEST(RenderPlan, ExecuteRejectsBlockOverHardMaxAtEntry) {
+  // SEC-G4-04 defense-in-depth bound (ORC-G4P4-02): render_chain_planned must
+  // reject an oversized block itself, before any scratch write.
+  const sfcore::SignalGraphDoc g = simple_chain(0.0);
+  sfcore::dsp::RenderPlan plan;
+  std::string err;
+  ASSERT_TRUE(sfcore::dsp::compile_render_plan(g, "out", plan, err)) << err;
+
+  sfcore::dsp::AudioBlock b = dc_block(sfcore::dsp::kBlockMaxSamples);
+  b.n = sfcore::dsp::kBlockMaxSamples + 1;  // simulate an out-of-contract block
+  EXPECT_FALSE(sfcore::dsp::render_chain_planned(plan, b, err));
+  EXPECT_EQ(err, "render_plan: block exceeds max");
+
+  // The boundary itself still executes (hard max is valid).
+  b.n = sfcore::dsp::kBlockMaxSamples;
+  EXPECT_TRUE(sfcore::dsp::render_chain_planned(plan, b, err)) << err;
+}
+
 TEST(RenderPlan, ExecuteMuteAndSoloExclusion) {
   sfcore::SignalGraphDoc g;
   g.nodes.push_back(mk_node("s1", sfcore::SfNodeSource, -3.0, 0.0, false, true));

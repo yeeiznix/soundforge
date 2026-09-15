@@ -27,6 +27,7 @@ add_executable(sf_unit_tests
     test_render_plan.cpp
     test_true_peak.cpp
     test_snapshot.cpp
+    test_audio_engine.cpp
 )
 
 target_include_directories(sf_unit_tests PRIVATE
@@ -48,7 +49,9 @@ target_compile_definitions(sf_unit_tests PRIVATE
 target_link_libraries(sf_unit_tests PRIVATE
     sfcore
     sfdsp
+    sfgraph
     sfmeasure
+    sfaudio
     gtest_main
     stdc++fs
 )
