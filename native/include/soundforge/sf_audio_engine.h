@@ -165,7 +165,13 @@ sf_result_t sf_audio_engine_last_report(const sf_audio_engine_t* e, char* buf,
    Buffer contract (SEC-G4-01): NULL e/buf or cap==0 → SF_E_INVALID_ARG;
    cap too small → SF_E_NOMEM AND buf[0]='\0' (never a partial payload);
    serialization is bounded, locale-independent (std::to_chars), and performs
-   exactly ONE sized copy. */
+   exactly ONE sized copy.
+   Meter mechanism (G5 P3, G4-6 reclassified): meter fields are plain `double`
+   (no std::atomic<double> anywhere in the codebase) guarded by a single engine
+   std::mutex `meter_mu` that serializes TruePeak::process/latch/reset AND
+   meter_json/reset_meters (SEC-G4-02(a)). No per-field atomics, no generation
+   guard: the mutex prevents torn reads. Render kernels themselves are
+   lock-free. */
 sf_result_t sf_audio_engine_meter_json(const sf_audio_engine_t* e, char* buf,
                                        size_t cap);
 
