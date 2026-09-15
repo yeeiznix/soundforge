@@ -98,7 +98,7 @@ reclassifies one (G4-6 — premise false):
   - **Session B (observable retarget):** chain `src(-6 dB) → out(+6 dB)`, target "out" ≈1.0; retarget to "src"; next ticks render "src" ≈0.501187 (observable), latch updates accordingly after meter reset.
   - No `project.migrate` audit entry; schemaVersion stays 2.
   - Amplitude assertions @1e-6 (both per F1).
-  - Full §7 suite green: ctest reg (313 passed + 1 locale skip) + UBSan (311 passed + 1 skip), pytest 12/12, drift empty, grep 26, Version 4/4, SF_E_* 7.
+  - Full §7 suite green: ctest reg (313 passed + 1 locale skip) + UBSan (313 passed + 1 skip), pytest 12/12, drift empty, grep 26, Version 4/4, SF_E_* 7.
 
 ## Engine ABI (host, `sf_audio_engine.h`)
 
@@ -117,7 +117,7 @@ Meter fields are plain `double` guarded by a single engine `std::mutex meter_mu`
 | Check | Result | Note |
 |---|---|---|
 | `cmake --build native/build && ctest` | **314 registered / 313 passed, 1 skipped** | 313 + 1 locale skip (de_DE.UTF-8); 2 net-new tests (LiveControlSameTargetRetargetBenign, LiveControlRetargetObservableAmplitudeAndMeterAdvance); 2 engine P4 tests merged in |
-| UBSan build `ctest` (`native/build-asan`) | **312 registered / 311 passed, 1 skipped** | `-fsanitize=undefined -fno-sanitize-recover=all`; same 1 locale skip |
+| UBSan build `ctest` (`native/build-asan`) | **314 registered / 313 passed, 1 skipped** | `-fsanitize=undefined -fno-sanitize-recover=all`; same 1 locale skip |
 | `ctest -R Version` | **4/4** | `sf_engine_version() == 0.1.0-g5`; `SF_ENGINE_VERSION_SUFFIX` `-g5` |
 | `pytest tests/python_tests -q` | **12 passed** | unchanged (version string only) |
 | drift diff canonical ↔ golden | **empty** | `project_schema.json` byte-identical to `schema_golden_v2.json` |
@@ -169,7 +169,7 @@ Android: static-only in this container (no SDK/NDK) — the documented G0–G3 l
 
 | # | Item | Result |
 |---|---|---|
-| 1 | ctest green on `native/build` **and** `native/build-asan` (UBSan); pytest green; JNI export grep **26** | **PASS** — 313 + 1 skip / 311 + 1 skip; pytest 12/12; grep 26 |
+| 1 | ctest green on `native/build` **and** `native/build-asan` (UBSan); pytest green; JNI export grep **26** | **PASS** — 313 + 1 skip / 313 + 1 skip; pytest 12/12; grep 26 |
 | 2 | No drift: `project_schema.json` ≡ `schema_golden_v2.json`; pins untouched; v1 untouched; schemaVersion **2**; no migration, no new key, no new `SF_E_*` | **PASS** — drift empty; schemaVersion 2; no `project.migrate`; SF_E_* 7 (unchanged) |
 | 3 | Live control: `SF_CMD_SET_OUTPUT` (cmd 8) enqueued, runner intercepts, updates engine's target, triggers plan recompile/publish; next tick renders new target | **PASS** — two e2e tests (same-target benign + observable retarget) |
 | 4 | No new JNI / no Android: `app/**` untouched; export grep 26; no Kotlin mirror | **PASS** — `app/**` byte-identical to G4 baseline |
