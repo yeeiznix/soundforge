@@ -210,6 +210,74 @@ TEST(AudioEngine, DestroyNullIsSafeNoop) {
 }
 
 // ---------------------------------------------------------------------------
+// G5 P4 — project-destroy skip-free guard (G4-8, mirrors SEC-G3-2). An engine
+// borrows `proj` even in CREATED state (its runner never started), so freeing
+// the project under an attached engine is a latent UAF. sf_project_destroy is
+// void, so it skips the free + sets the handle error; the caller must
+// sf_audio_engine_destroy first, then destroy the project again.
+// ---------------------------------------------------------------------------
+
+// Flow (a): engine destroyed first -> the claim is released -> the project
+// destroy takes the normal free path with no guard error.
+TEST(AudioEngine, ProjectDestroyAfterEngineDestroySucceeds) {
+  sf_project_t* p = sf_project_create("E", nullptr);
+  ASSERT_NE(p, nullptr);
+  sf_cmd_queue_t* q = nullptr;
+  ASSERT_EQ(sf_cmd_queue_create(&q), SF_OK);
+  sf_audio_engine_t* e = nullptr;
+  ASSERT_EQ(sf_audio_engine_create(&e, q, p), SF_OK);
+
+  // Engine destroyed FIRST (CREATED state; no runner/pacer thread to stop):
+  // the audioEngine claim is released before the engine free.
+  ASSERT_EQ(sf_audio_engine_destroy(e), SF_OK);
+  // No guard fired: the handle error is still the pristine sentinel.
+  EXPECT_STREQ(sf_last_error(p), "no error");
+
+  // The project destroy now takes the normal free path. Do not touch `p`
+  // after this point.
+  sf_project_destroy(p);
+  sf_cmd_queue_destroy(q);
+}
+
+// Flow (b): destroy-project WITHOUT engine destroy -> the void guard skips the
+// free + sets the attached-engine message; after sf_audio_engine_destroy the
+// claim is cleared and the second project destroy succeeds.
+TEST(AudioEngine, ProjectDestroySkippedWhileEngineAttachedThenRetrySucceeds) {
+  sf_project_t* p = sf_project_create("E", nullptr);
+  ASSERT_NE(p, nullptr);
+  sf_cmd_queue_t* q = nullptr;
+  ASSERT_EQ(sf_cmd_queue_create(&q), SF_OK);
+  sf_audio_engine_t* e = nullptr;
+  ASSERT_EQ(sf_audio_engine_create(&e, q, p), SF_OK);
+
+  // Engine is CREATED only: no runner ever started, no pacer thread.
+  auto* ip = reinterpret_cast<sfcore::SfProject*>(p);
+  ASSERT_EQ(ip->runnerState.load(std::memory_order_acquire),
+            static_cast<int32_t>(sfcore::SfRunnerIdle));
+  ASSERT_EQ(ip->audioEngine.load(std::memory_order_acquire), static_cast<void*>(e));
+
+  // destroy-project BEFORE destroy-engine: the void API skips the free and
+  // signals on the handle error store.
+  sf_project_destroy(p);
+  EXPECT_STREQ(sf_last_error(p), "project.destroy: audio engine attached");
+
+  // The handle was NOT freed: synchronous reads still work (runner is IDLE, so
+  // they are not rejected) and the engine claim still owns the slot.
+  EXPECT_EQ(sf_project_get_schema_version(p), SF_SCHEMA_VERSION);
+  EXPECT_STREQ(sf_project_get_name(p), "E");
+  EXPECT_EQ(ip->audioEngine.load(std::memory_order_acquire), static_cast<void*>(e));
+
+  // Release the engine first (this clears the claim)...
+  ASSERT_EQ(sf_audio_engine_destroy(e), SF_OK);
+  EXPECT_EQ(ip->audioEngine.load(std::memory_order_acquire), nullptr);
+
+  // ...then the mandatory SECOND project destroy proceeds (normal free). Do
+  // not touch `p` after this point.
+  sf_project_destroy(p);
+  sf_cmd_queue_destroy(q);
+}
+
+// ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
 

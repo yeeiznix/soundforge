@@ -153,6 +153,14 @@ extern "C" sf_project_t* sf_project_create(const char* name, const char* author)
 extern "C" void sf_project_destroy(sf_project_t* p) {
   if (!p) return;
   auto* proj = reinterpret_cast<sfcore::SfProject*>(p);
+  // G5 P4 (G4-8, mirrors SEC-G3-2): an attached engine borrows `proj` even in
+  // CREATED state (its runner never started). Freeing the project under the
+  // engine's borrowed handle is a latent UAF; skip the free and signal.
+  if (proj->audioEngine.load(std::memory_order_acquire) != nullptr) {
+    sfcore::log_line(SF_LOG_ERROR, "project", "destroy: audio engine attached");
+    sfcore::set_handle_error(proj, "project.destroy: audio engine attached");
+    return;
+  }
   // P4b SEC-G3-2 (void-safe): while the runner thread is alive, freeing the
   // handle would dangle the runner's `proj`/`state` pointers (ORC-P4a-A). The
   // signature is additive-ABI `void`, so we set the handle error + log ERROR
