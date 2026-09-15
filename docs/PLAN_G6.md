@@ -1,10 +1,11 @@
 # SoundForge — Gate G6 Plan: Python Reference/Regression Parity —
 # ctypes Layer over a Host Shared Library + Pure-Python Reference + Lockstep Suite
 
-> **Status: DRAFT — scratch document for orchestrator review (NOT committed).**
+> **Status: AMENDED — two-reviewer gate complete (oracle ORC-G6-01..17 +
+> security SEC-G6-01..10 landed, 2026-09-15); P1-ready.**
 > This document is the phase-0 plan contract for Gate G6. Reviewed and amendments
 > applied per the gate process (final two-reviewer gate: oracle +
-> security-reviewer, out-of-band) before P1 may begin. The plan specifies the
+> security-reviewer, out-of-band) before P1. The plan specifies the
 > deferred G0 lane **"Python reference/regression parity"** — an
 > end-to-end-testable Python layer against the real C++ engine, HOST-side only.
 > **Supersedes:** `docs/PLAN_G0.md`…`PLAN_G5.md` for G6 scope only. G0–G5 remain
@@ -62,8 +63,8 @@ G6 closes that gap with an end-to-end-testable **host-side** Python layer:
 
 | Pillar | Scope | Deliverable |
 |---|---|---|
-| **Host shared library** | `native/CMakeLists.txt` (EDIT), `native/src/host/CMakeLists.txt` (NEW) | New `SF_BUILD_HOST_SHARED` option (default ON on non-Android) gating a SHARED target `soundforge` → `libsoundforge.so`, linking the five existing statics + `Threads::Threads` + `stdc++fs`. Default visibility so all `extern "C"` exports are present. Built in **both** `native/build` and `native/build-asan` (UBSan) trees. Does not touch the static unit-test target, does not touch `app/src/main/cpp/CMakeLists.txt` (which never `add_subdirectory`s the native tree — verified). |
-| **ctypes loader + bindings** | `python/soundforge_py/engine.py` (NEW P1, EDIT P2) | Stdlib `ctypes.CDLL` loader with a documented path contract (env `SOUNDFORGE_LIB_PATH` → `native/build/libsoundforge.so`), lazy load so `import soundforge_py.engine` never fails without a build, and bindings for ~39 symbols: version (3), schema (1), migration (1), project (17), string/error utils (3), command queue (2), audio engine (11). High-level Pythonic helpers + `AudioEngine`/`Project` context managers. |
+| **Host shared library** | `native/CMakeLists.txt` (EDIT), `native/src/host/CMakeLists.txt` (NEW), `native/src/host/host_stub.cpp` (NEW, generated 1-line anchor TU) | New `SF_BUILD_HOST_SHARED` option (default ON on non-Android) gating a SHARED target `soundforge` → `libsoundforge.so`, linking the five existing statics + `Threads::Threads` + `stdc++fs`, plus a 1-line anchor TU (CMake requires ≥1 source on a buildable library target — ORC-G6-01) and a pinned `LIBRARY_OUTPUT_DIRECTORY` → build root (ORC-G6-03). Default visibility so all `extern "C"` exports are present. Built in **both** `native/build` and `native/build-asan` (UBSan) trees. Does not touch the static unit-test target, does not touch `app/src/main/cpp/CMakeLists.txt` (which never `add_subdirectory`s the native tree — verified). |
+| **ctypes loader + bindings** | `python/soundforge_py/engine.py` (NEW P1, EDIT P2) | Stdlib `ctypes.CDLL` loader with a documented path contract (env `SOUNDFORGE_LIB_PATH` → `native/build/libsoundforge.so`), lazy load so `import soundforge_py.engine` never fails without a build, opened with explicit `RTLD_LOCAL` (SEC-G6-02); env override must be absolute, `realpath`-canonicalized, `isfile`-checked, non-absolute values rejected (SEC-G6-01). Bindings for ~39 symbols: version (3), schema (1), migration (1), project (17), string/error utils (3), command queue (2), audio engine (11). High-level Pythonic helpers + `AudioEngine`/`Project` context managers. |
 | **Path (loader) contract** | `tests/python_tests/conftest.py` (NEW) | Resolution order: `$SOUNDFORGE_LIB_PATH` (absolute .so path; used to target the UBSan build) → `REPO_ROOT/native/build/libsoundforge.so` → clear `RuntimeError` naming both paths + `cmake --build native/build` hint. Conftest also provides `repo_root`, `fixtures_dir`, relative fixture paths — without touching `test_schema_py.py` (KEEP, golden pins untouched). |
 | **Version/schema parity** | `test_engine_parity.py` (NEW P1) | `sf_engine_version()` == `__version__` == `0.1.0-gN`; `sf_schema_version()` == `SCHEMA_VERSION` == 2; `sf_is_compatible(0..2)==1`, `(3,-1)==0` — these make version drift a **test failure** (self-checking lockstep). |
 | **Validate lockstep parity** | `test_engine_parity.py` (NEW P1) | Same shared fixture corpus (`tests/fixtures/`) through EITHER native `sf_validate_project_json` (structural mirror in `schema.cpp`) or Python `validate_project` (jsonschema on the canonical file): **accept/reject decision + error presence equal** per fixture. Messages are not compared (two different validators by design). |
@@ -93,7 +94,9 @@ G6 closes that gap with an end-to-end-testable **host-side** Python layer:
   `app/src/main/cpp/CMakeLists.txt` keeps its stale `0.1.0-g0` stamp
   (untouched by design — see residual G6-5).
 - **Native TU edits** — G6 touches **no** `.cpp`/`.hpp` under `native/src/**`
-  except `version.cpp` (P4 fallback string) and `version_gen.h.in` (P4 comment);
+  except `version.cpp` (P4 fallback string), `version_gen.h.in` (P4 comment),
+  and `src/host/host_stub.cpp` (P1 — 1-line anchor TU with **no engine logic**;
+  CMake requires ≥1 source on a buildable library target, ORC-G6-01);
   headers, graph, dsp, audio, measurement sources are KEEP. The shared lib must
   link the existing statics **unchanged** (a pure packaging/link gate for the
   native layer). If a linker error demands a TU edit, that is a P1 gate
@@ -112,8 +115,10 @@ G6 closes that gap with an end-to-end-testable **host-side** Python layer:
 
 ### 1.4 Gating rule
 
-Same spirit as G0–G5 with a Python-specific adaptation: new native file is
-**build config only** (`src/host/CMakeLists.txt`, no C++); new Python files
+Same spirit as G0–G5 with a Python-specific adaptation: new native files are
+**build config only** — `src/host/CMakeLists.txt` plus a 1-line anchor TU
+`src/host/host_stub.cpp` (no engine logic; the "native layer consumed
+unchanged" posture from §1.3 holds explicitly); new Python files
 carry a LOC budget per module (declaration-table style over per-function
 boilerplate): `engine.py` ≤ ~320, `reference/engine.py` ≤ ~150,
 `regression/engine_parity.py` ≤ ~120, `conftest.py` ≤ ~60,
@@ -216,10 +221,10 @@ for the io callbacks) as the sole binding mechanism. No cffi, no pybind11, no
   (jsonschema stays only in `schema.py`, untouched).
 - All ~39 wrapped symbols carry explicit `argtypes`/`restype`; no `ctypes`
   default-conversion path is used.
-- `nm -D --defined-only native/build/libsoundforge.so | grep ' T sf_'` shows
-  ≥ 39 symbols including `sf_engine_version`, `sf_project_create`,
-  `sf_audio_engine_create`, `sf_migrate_json`, `sf_validate_project_json`,
-  `sf_free_string`, `sf_last_error*`, and **does not** show `sf_error_string`
+- `nm -D --defined-only native/build/libsoundforge.so | grep ' T sf_'` includes
+  **every** symbol in the §3.3 wrapped-surface table (explicit name list, not
+  a bare count — ORC-G6-13: 65 `T sf_` exports exist, so ≥39 passes even if a
+  wrapped symbol is missing) and **does not** show `sf_error_string`
   (header-inline, not exported — wrapper uses `sf_last_error()`).
 
 ### 3.2 D2 — Shared-library artifact: new host-only SHARED target `soundforge`
@@ -240,29 +245,37 @@ and create `native/src/host/CMakeLists.txt`:
 # Links the five existing STATIC libs unchanged; default visibility exports
 # the extern "C" surface. Android NEVER builds this target (guarded by
 # SF_BUILD_HOST_SHARED AND NOT ANDROID at the top level).
-add_library(soundforge SHARED)
-target_link_libraries(soundforge PUBLIC
+find_package(Threads REQUIRED)          # imported target is directory-scoped —
+                                        # does NOT leak from src/core|graph|audio (ORC-G6-02)
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/host_stub.cpp"
+     CONTENT "/* G6 host shared-lib anchor TU — no engine logic */\n")
+add_library(soundforge SHARED "${CMAKE_CURRENT_BINARY_DIR}/host_stub.cpp")  # ≥1 source required (ORC-G6-01)
+target_link_libraries(soundforge PRIVATE
     -Wl,--whole-archive                                    # require ALL objects from the
     sfcore sfgraph sfdsp sfmeasure sfaudio                 # five statics (below)
     -Wl,--no-whole-archive
     Threads::Threads stdc++fs)
 set_target_properties(soundforge PROPERTIES
     OUTPUT_NAME soundforge
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"         # .so lands at build/libsoundforge.so (ORC-G6-03)
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED ON
     CXX_VISIBILITY_PRESET default   # explicit: keep default visibility
     VISIBILITY_INLINES_HIDDEN OFF)
 ```
 
-> **ORC-G6 pre-gate amendment (D2, orchestrator review):** `-Wl,--whole-archive`
-> is **mandatory**. A shared library with no source files has no undefined
-> symbols of its own, and GNU/LLVM ld extract from a static archive **only the
-> object files that resolve an undefined symbol** — so without whole-archive
-> semantics `libsoundforge.so` would link but export **nothing**. The
-> implementer may use the modern `$<LINK_LIBRARY:WHOLE_ARCHIVE,...>` generator
-> expression (CMake ≥ 3.24) or the plain `-Wl,--whole-archive … --no-whole-archive`
-> form above; the D1 `nm -D` gate (≥39 `sf_` symbols) is the acceptance check
-> either way.
+> **ORC-G6 pre-gate amendment (D2, orchestrator + oracle review):**
+> `-Wl,--whole-archive` is **mandatory**. A shared library with no source files
+> has no undefined symbols of its own, and GNU/LLVM ld extract from a static
+> archive **only the object files that resolve an undefined symbol** — probe
+> confirmed: whole-archive **off** → **0** `T sf_` exports; whole-archive **on**
+> → **65** (ORC-G6-17). The `$<LINK_LIBRARY:WHOLE_ARCHIVE,...>` genex (CMake ≥
+> 3.24) and the plain `-Wl,--whole-archive … --no-whole-archive` form both work
+> (65 exports); the `$<TARGET_FILE:…>` + `--push/--pop-state` form fails at
+> generate time. No link-level duplicate-definition hazard was reproducible —
+> duplicates across statics either fail the .so link loudly or are deduped;
+> treat that as link-time-only, not a silent surface. The D1 `nm -D` gate
+> (explicit wrapped-name list, §3.3) is the acceptance check either way.
 
 **Rationale.**
 - **Where it lives.** `src/host/` mirrors the existing per-module layout; the
@@ -290,7 +303,12 @@ set_target_properties(soundforge PROPERTIES
 
 **Acceptance.**
 - `cmake --build native/build` and `cmake --build native/build-asan` both
-  produce `libsoundforge.so` (P1 acceptance lists `ls` of both trees).
+  produce `libsoundforge.so` **at the build root** (pinned
+  `LIBRARY_OUTPUT_DIRECTORY` — `native/build/libsoundforge.so` and
+  `native/build-asan/libsoundforge.so`; ORC-G6-03) (P1 acceptance lists `ls`
+  of both trees).
+- `target_link_libraries` uses **PRIVATE** — the oracle's corrected form; a
+  leaf shared target never propagates the statics (PUBLIC harmless but leaky).
 - `sf_unit_tests` target/link set is byte-unchanged (no CMake edit touches
   `tests/unit/CMakeLists.txt`); ctest counts stay 314/314 on both trees.
 - Android app CMake untouched; JNI grep stays 26.
@@ -301,24 +319,31 @@ set_target_properties(soundforge PROPERTIES
 
 **Decision.** `soundforge_py/engine.py` resolves the library in this order:
 
-1. `$SOUNDFORGE_LIB_PATH` — absolute path; the *named* mechanism for pointing
-   pytest at `native/build-asan/libsoundforge.so` (D6).
+1. `$SOUNDFORGE_LIB_PATH` — the *named* mechanism for pointing pytest at
+   `native/build-asan/libsoundforge.so` (D6). **Must be an absolute path** —
+   non-absolute values are rejected with the D3 `RuntimeError` (closes the
+   CWD-relative hijack variant; SEC-G6-01). The value is `realpath`-canonicalized
+   and `isfile`-checked before dlopen; on failure the `RuntimeError` names both
+   candidate paths + the `cmake --build` hint.
 2. `REPO_ROOT / "native" / "build" / "libsoundforge.so"` — default (reg build).
 3. Otherwise `RuntimeError` naming both tried paths and a
    `cmake --build native/build` hint.
 
 Loading is **lazy** (function-level, cached in a module singleton): importing
 `soundforge_py.engine` never fails without a build, so the 12 legacy tests and
-any non-parity import path stay green on a source-only checkout. Wrapped
+any non-parity import path stay green on a source-only checkout. The CDLL is
+opened with **explicit `RTLD_LOCAL`** — deterministic on any platform, and the
+.so's internal mangled C++ symbols can never interpose on (or be interposed by)
+other DSOs in the pytest process (SEC-G6-02). Never `RTLD_GLOBAL`. Wrapped
 surface (≈39 symbols, header → functions):
 
 | Header | Wrapped | Notes |
 |---|---|---|
 | `sf_version.h` | `sf_engine_version`, `sf_schema_version`, `sf_is_compatible` | lockstep vs `__version__`/`SCHEMA_VERSION` |
-| `sf_schema.h` | `sf_validate_project_json` | sized err buffer (4 KB); decision-level result |
-| `sf_migration.h` | `sf_migrate_json` | in-place `create_string_buffer`; `inout_len`/`cap` semantics |
-| `sf_project.h` | create/destroy/clone/to_json/from_json/save_to_path/open_from_path + 6 getters + rename/venue/scene mutators + health_check (17) | `char** out_json` via `POINTER(c_char_p)` + `sf_free_string`; getters via `c_char_p.value` |
-| utils | `sf_free_string`, `sf_last_error`, `sf_last_error_global` | error text path: `sf_error_string` NOT exported (header-inline) |
+| `sf_schema.h` | `sf_validate_project_json` | sized err buffer (4 KB); decision-level result; JSON entry via the `_as_bytes` helper (SEC-G6-03) |
+| `sf_migration.h` | `sf_migrate_json` | in-place buffer sized `max(8*len(raw), 1<<16)` (or NOMEM-retry doubling — ORC-G6-08: pretty output ≈15.6× minified); `*inout_len` excludes NUL, cap = buffer size; `_as_bytes` helper (SEC-G6-03) |
+| `sf_project.h` | create/destroy/clone/to_json/from_json/save_to_path/open_from_path + 4 getters + rename/venue/scene mutators + health_check (17 total) | `char** out_json` via `POINTER(c_char_p)` — free via `_take_string` (bytes copied with `string_at`, out ptr zeroed, `sf_free_string` exactly once; SEC-G6-04); restype/cast trap: `out.contents` on `c_char_p` raises `AttributeError` — free `ctypes.cast(out, c_void_p)` (ORC-G6-14); getters via `c_char_p.value` (no free — static/internal storage) |
+| utils | `sf_free_string`, `sf_last_error`, `sf_last_error_global` | error text path: `sf_error_string` NOT exported (header-inline); error strings valid only until the next error-set, read same-thread immediately (SEC-G6-04) |
 | `sf_command_queue.h` | `sf_cmd_queue_create`, `sf_cmd_queue_destroy` | engine binds a caller-owned queue (must outlive engine) |
 | `sf_audio_engine.h` | all 11 exports | `AudioEngine` context manager; `CFUNCTYPE` io callbacks |
 
@@ -333,10 +358,25 @@ project. The env override is needed for the UBSan cross-run (D6) and costs one
 line.
 
 **Acceptance.**
-- D1 `nm` check passes; wrapper has explicit argtypes/restype on every symbol.
-- `conftest.py` provides `soundforge_lib` fixture (cached `CDLL`) honoring
-  `SOUNDFORGE_LIB_PATH`; parity tests alone use it (the 12 legacy tests
-  untouched).
+- D1 `nm` check passes (explicit wrapped-name list); wrapper has explicit
+  argtypes/restype on every symbol.
+- One `_as_bytes(s)` helper derives byte length from the encoded bytes
+  (`len(s.encode("utf-8"))`, never char count / `sys.getsizeof`) for **all**
+  JSON-entry calls — `sf_validate_project_json`, `sf_project_from_json`,
+  `sf_migrate_json` (SEC-G6-03; a char-count length on non-ASCII input is an
+  OOB read in the .so).
+- One `_take_string(out_ptr)` helper is the **only** code path that frees
+  native memory (SEC-G6-04); raw `char*` never escapes the wrapper.
+- Wrapper classes have **no `__del__`/finalizers** — destruction is explicit
+  via context managers only; `AudioEngine` holds strong Python refs to its
+  queue and project for its lifetime (SEC-G6-06).
+- `conftest.py` provides `soundforge_lib` fixture (session-scoped, cached
+  `CDLL`) honoring `SOUNDFORGE_LIB_PATH` (absolute, canonicalized); parity
+  tests alone use it (the 12 legacy tests untouched). Conftest computes
+  `repo_root` file-relatively (`Path(__file__).resolve().parents[...]`) and
+  avoids importing `engine.py` at module time — the lazy-load contract applies
+  to conftest too, keeping the legacy 12 green on source-only checkouts
+  (SEC-G6-08).
 - Lifecycle helper ordering documented and enforced by context managers:
   `project → queue → engine` create, destroy in reverse; `engine` must be
   destroyed before its queue and before its project (mirrors the G4 caller
@@ -358,8 +398,14 @@ line.
 Deterministic surface order (P1 → P2 → P3):
 1. version/schema compatibility lockstep,
 2. schema validate lockstep (decision-level on the shared fixture corpus),
-3. migration lockstep (dict-equal results),
-4. project JSON round-trip (semantic equality),
+3. migration lockstep (**normalized** dict-equality — UUID/RFC3339 timestamp
+   fields masked on both sides, auditLog as ordered tuples, `engineVersion`
+   kept strict; ORC-G6-04 — raw equality is impossible: both migrators inject
+   fresh UUIDs + wall-clock ms),
+4. project JSON round-trip (**canonical-form idempotence**: pass1 == pass2 ==
+   pass3 of `to_json(from_json(X))`; do not compare raw fixture bytes to
+   emitted JSON — `dspPresetRef:null`/`gainDb:0.0` emission differs per
+   fixture; ORC-G6-06),
 5. audio: fixed-gain chain → `tick` → `meter_json`/captured-block parity.
 
 Audio parity mechanics (P2): each case builds its chain **as project JSON in
@@ -374,6 +420,25 @@ block-level comparison. One fresh engine session **per test case** — the
 engine/runner are one-shot, and no test shares engine state across cases
 (mirrors the G5 two-session doctrine).
 
+**Byte identity (SEC-G6-07):** parity serializes the project document **once**
+as Python bytes and feeds those exact bytes to `sf_project_from_json` /
+`sf_validate_project_json` / `sf_migrate_json` and to the reference
+(`json.loads` on the same bytes) — no re-dump of a parsed dict for the native
+side, which could mask a UTF-8/escaping differential. Fixture files reach
+`sf_validate_project_json` as raw file bytes.
+
+**Callback contract (SEC-G6-05, all binding):** callbacks copy data **within
+the call** (read fills per-channel `(c_float*frames)` views; write copies out
+immediately) and never retain/dereference engine-owned pointers after return.
+Bodies are wrapped in `try/except` — on exception, record in a per-session
+error list and return `SF_E_IO` (never let it escape: ctypes would print and
+return 0 == SF_OK, treating half-filled input as valid). Assert `channels == 2`
+and `frames >= 1` at the top of each callback. The `CFUNCTYPE` instances are
+kept alive as attributes of the `AudioEngine` wrapper for the engine's lifetime
+(the native side stores raw function pointers; dropping the CFUNCTYPE is a
+dangling pointer on the next tick). Parity teardown asserts zero recorded
+callback errors.
+
 **Rationale.**
 - Running the *real* engine makes G6 regression evidence (not a reimplementation
   pretending to be the engine); the Python reference is the *expectation*, and
@@ -384,23 +449,34 @@ engine/runner are one-shot, and no test shares engine state across cases
   canonical file. They are deliberately two implementations of one spec; G6
   pins them together on the shared corpus (the G1-era `dspPresetRef` lockstep
   already depends on this). Message text is documented as non-compared.
-- Migrate parity is dict-equality **including** `engineVersion`: both sides
-  stamp the same gate version (`0.1.0-g5` through P3, `0.1.0-g6` from P4 —
-  bumped in one commit, so equality holds at every gate checkpoint).
+- Migrate parity is **normalized** dict-equality: UUID-v4 and RFC3339 string
+  fields (`project.createdAt/modifiedAt`, `venue.id`, `scene.id`,
+  `auditLog[].ts`) are masked on both sides — both migrators inject fresh
+  UUIDs + wall-clock ms, so raw equality is unimplementable (ORC-G6-04 probe:
+  NO on every fixture). `engineVersion` is kept **strict** in the compare —
+  both sides stamp the same gate version and that is the real lockstep signal
+  (`0.1.0-g5` through P3, `0.1.0-g6` from P4 — bumped in one commit).
 
 **Acceptance.**
 - Every parity case has a deterministic oracle (exact float anchors or
   reference-computed values) and no sleeps/barriers: `tick` is documented
   deterministic (no wall clock), the suite completes in seconds.
 - Anchors (mirrored from the G5 fixture math, `test_audio_engine.cpp:931–945`
-  and D5): chain `src(-6 dB)→out(0 dB)`, output `out` → block samples and
-  meter `truePeakLinear` **0.501187** (`10^(-6/20)`); chain
-  `src(-6)→out(+6)` → **1.0** (`0.501187 × 10^(+6/20) = 0.501187 × 1.995262`);
-  chain `src(+6)→out(0)` → **1.995262** with `clipped == true`; silence path
-  (`io` NULL) → `truePeakLinear == null` for both channels.
-- Tolerances: meter `|native − reference| ≤ 1e-3` (same as unit tests); block
-  samples `≤ 1e-5` relative (`1e-5 × (1 + |ref|)`); JSON compare is
-  dict-semantic (order-insensitive).
+  and D5; oracle re-verified via ctypes, prime or no prime): chain
+  `src(-6 dB)→out(0 dB)`, output `out` → block samples and meter
+  `truePeakLinear` **0.501187** (`10^(-6/20)`); chain `src(-6)→out(+6)` →
+  **1.0** (`0.501187 × 10^(+6/20) = 0.501187 × 1.995262`); chain
+  `src(+6)→out(0)` → **1.995262** with `clipped == true` (probe: clipped true
+  for (+6,0), false for (-6,0)). **Silence path** (`io` NULL) →
+  `truePeakLinear == 0.0` and `truePeakDb == null` for both channels — the
+  frozen engine emits `[0.0,0.0]` linear, `[null,null]` dB (ORC-G6-05, probe;
+  NOT `null` linear).
+- Tolerances, per surface (single source of truth in
+  `regression/engine_parity.py`, ORC-G6-10): meter `|native − reference| ≤ 1e-3`
+  (same as unit tests, DC only); **DC-anchor block samples ≤ 1e-6 absolute**
+  (mirrors `test_audio_engine.cpp:941–942`); **sine block samples ≤ 1e-5
+  relative** (`1e-5 × (1 + |ref|)` — float64 reference vs float32 engine);
+  JSON compare is dict-semantic (order-insensitive).
 
 ### 3.5 D5 — Reference engine scope: minimal-but-honest, chain-gain surfaces only
 
@@ -462,11 +538,18 @@ SOUNDFORGE_LIB_PATH=$PWD/native/build-asan/libsoundforge.so \
   runtime to be first in the loader list (`LD_PRELOAD`) — that is the classic
   "ASan runtime does not come first" failure mode. This tree has **no ASan**;
   libubsan loads fine as a `DT_NEEDED` dependency of a dlopened library into a
-  non-instrumented process (no ordering requirement). The Python process itself
-  is not instrumented, so no interceptor clash. TSan (`build-tsan` exists) is
-  explicitly **excluded**: TSan-instrumented libraries loaded into a non-TSan
-  process are unsupported, and the engine's threading is already covered by the
-  C++ unit suite (G6-7).
+  non-instrumented process (no ordering requirement — oracle probe verified
+  `build-asan` is UBSan-only). The Python process itself is not instrumented,
+  so no interceptor clash. TSan (`build-tsan` exists) is explicitly
+  **excluded**: TSan-instrumented libraries loaded into a non-TSan process are
+  unsupported, and the engine's threading is already covered by the C++ unit
+  suite (G6-7). The .so is loaded RTLD_LOCAL (SEC-G6-02), so its mangled C++
+  interior can never interpose on other DSOs. **Future ASan note:** if the tree
+  ever gains real ASan, the "runtime must be first" rule reapplies for the
+  Python process — keep the degrade-path wording (SEC-G6-02).
+- **P1 confirmation (Q3):** P1 must confirm `SOUNDFORGE_LIB_PATH=$PWD/native/build-asan/libsoundforge.so`
+  actually loads the UBSan build (e.g. `sf_engine_version()` smoke) **before**
+  the documented degrade path may be relied on.
 - Determinism guard: the parity code paths are the same code the unit suite
   already runs under UBSan; the only new Python-side code is ctypes glue (not
   instrumented). Risk of a UBSan-only divergence is ≈ nil; if the environment
@@ -500,7 +583,7 @@ pyproject `0.1.0-g0` staleness is fixed here):
 | # | Surface | Edit |
 |---|---|---|
 | 1 | `native/include/soundforge/sf_version.h` | `SF_ENGINE_VERSION_SUFFIX "-g6"` (+ one-line gate-history comment) |
-| 2 | `native/CMakeLists.txt` | `SF_BUILD_VERSION "0.1.0-g6"` |
+| 2 | `native/CMakeLists.txt` | `SF_BUILD_VERSION "0.1.0-g6"` + the adjacent comment-history line and `g5+build.123` example (ORC-G6-12 — G5 precedent ORC-G5-06) |
 | 3 | `native/src/core/version.cpp` | fallback `SF_VERSION_STRING "0.1.0-g6"` |
 | 4 | `native/src/core/version_gen.h.in` | comment-only bump (value flows from CMake) |
 | 5 | `python/soundforge_py/__init__.py` | `__version__ = "0.1.0-g6"` |
@@ -553,7 +636,10 @@ tests). JNI grep stays **26**.
 - **Files:**
   - `native/CMakeLists.txt` (EDIT — `SF_BUILD_HOST_SHARED` option +
     guarded `add_subdirectory(src/host)`).
-  - `native/src/host/CMakeLists.txt` (NEW — D2 shared target).
+  - `native/src/host/CMakeLists.txt` (NEW — D2 shared target, corrected form:
+    anchor TU + `find_package(Threads)` + `LIBRARY_OUTPUT_DIRECTORY`).
+  - `native/src/host/host_stub.cpp` (NEW — 1-line anchor TU, no engine logic;
+    generated by `file(GENERATE …)` from the CMake file, not committed).
   - `python/soundforge_py/engine.py` (NEW — D3 loader + bindings for version,
     schema, migration, project, string/error utils, command queue create/destroy).
   - `tests/python_tests/conftest.py` (NEW — `soundforge_lib` fixture honoring
@@ -562,20 +648,32 @@ tests). JNI grep stays **26**.
     lockstep, validate lockstep over the 5-fixture corpus, migrate lockstep
     v0→2/v1→2 dict-equality, project round-trip + getters).
 - **Acceptance:**
-  - Both trees build the `.so`; `nm -D` gate passes (D1); `sf_unit_tests`
-    untouched; ctest 314/314 both trees; JNI 26.
-  - Parity subset green against **both** reg and UBSan `.so` (D6 commands).
+  - Both trees build the `.so`; `nm -D` gate passes (D1, explicit wrapped-name
+    list); `sf_unit_tests` untouched; ctest 314/314 both trees; JNI 26.
+  - Parity subset green against **both** reg and UBSan `.so` (D6 commands);
+    P1 confirms the env override loads the UBSan build before relying on any
+    degrade path (Q3).
   - `test_version_lockstep`: `sf_engine_version() == __version__ == 0.1.0-g5`
     (pre-P4), `sf_schema_version() == SCHEMA_VERSION == 2`, compatibility
     truth table `(0..2 → 1, 3/-1 → 0)`.
   - Validate decision parity on the 5 fixtures (minimal_v2, signalgraph_v2,
-    dspchain_v2, corrupt, graph_corrupt): accept/reject + error-presence equal.
-  - Migrate dict-equality for v0→2 and v1→2 (incl. `engineVersion`).
-  - Round-trip semantic equality for minimal_v2 + signalgraph_v2; getters
-    lockstep with the fixture fields.
+    dspchain_v2, corrupt, graph_corrupt): accept/reject + error-presence equal
+    (ORC-G6-16 probe: parity holds on all of them, incl. the full corpus).
+  - Migrate **normalized** equality for v0→2 and v1→2 (UUID/RFC3339 masked,
+    auditLog ordered tuples, `engineVersion` strict — ORC-G6-04).
+  - Round-trip **canonical-form idempotence** on minimal_v2 + signalgraph_v2
+    (pass1 == pass2 == pass3 of `to_json(from_json(X))`; NOT raw fixture bytes
+    — ORC-G6-06); `dspchain_v2` excluded from round-trip (native codec drops
+    `signalGraph.mixers` — known-lossy, ORC-G6-07, residual G6-9). Getters
+    lockstep with fixture fields; `sf_project_get_engine_version` compares to
+    the **fixture's own `engineVersion`** (e.g. `0.1.0-g1`), only
+    `sf_engine_version()` compares to `__version__` (ORC-G6-09).
+  - One non-ASCII parity case (`café` in a venue/scene name): round-trips
+    `from_json`/`to_json` and validates on both sides — proves byte-length
+    discipline (SEC-G6-03).
   - `import soundforge_py.engine` works with no `.so` present (lazy load);
     calling a binding without a build raises the D3 `RuntimeError`.
-  - pytest ≈ 12 + ~8 = ~20; no fixed sleeps.
+  - pytest ≈ 12 + ~9 = ~21; no fixed sleeps.
 - **Validation:** host ctest (both trees) + both pytest invocations.
 - **Commit:** `p1(g6): host libsoundforge.so + ctypes loader + version/schema/migrate/project parity`
 
@@ -595,12 +693,19 @@ tests). JNI grep stays **26**.
   - Chain fixtures built as project JSON in Python, `sf_project_from_json`,
     engine lifecycle per case (create→configure→set_output→start(0)→tick→
     stop→join→destroy; queue+project outlive engine, destroyed in reverse).
-  - Anchors (D4): `(-6,0)` → meter + block **0.501187** @1e-3/1e-6;
-    `(-6,+6)` → **1.0**; `(+6,0)` → **1.995262** + `clipped==true`; silence
-    (`io` NULL) → `truePeakLinear == null`.
+  - Anchors (D4): `(-6,0)` → meter + block **0.501187** (meter |Δ| ≤ 1e-3,
+    block ≤ 1e-6 abs); `(-6,+6)` → **1.0**; `(+6,0)` → **1.995262** +
+    `clipped==true`; silence (`io` NULL) → `truePeakLinear == 0.0` +
+    `truePeakDb == null` (ORC-G6-05).
   - `reset_meters` keeps `blocksRendered` monotonic (not reset) — lockstep.
-  - Sine (e.g. 1 kHz @ 48 kHz, N=256) block parity vs reference @1e-5 rel;
+  - Sine (e.g. 1 kHz @ 48 kHz, N=256) block parity vs reference ≤ 1e-5 rel;
     meter parity DC-only (no sine meter compare — D5/G6-1).
+  - Callback contract verified by construction: `try/except` bodies recording
+    errors (teardown asserts zero), `channels == 2`/`frames >= 1` tripwires,
+    CFUNCTYPE instances alive on the wrapper — parity teardown proves it
+    (SEC-G6-05).
+  - Lifecycle: no `__del__` on wrappers; context managers only; `AudioEngine`
+    holds strong refs to queue + project (SEC-G6-06).
   - Both pytest invocations green; pytest ≈ ~23.
 - **Validation:** both pytest invocations + ctest (confirm no native change broke
   anything).
@@ -660,7 +765,7 @@ the existing native coverage.
 | File | Cases |
 |---|---|
 | `test_schema_py.py` (KEEP) | 12 existing; untouched; golden SHA-256 pins intact. |
-| `test_engine_parity.py` (NEW/EDIT) | P1: version lockstep (stamp==`__version__`, schema const, compat truth table); validate decision lockstep ×5 fixtures; migrate dict-equality v0→2/v1→2; project round-trip + getters ×2 fixtures. P2: audio anchors — `(-6,0)→0.501187`, `(-6,+6)→1.0`, `(+6,0)→1.995262+clip`, silence→null meters, `reset_meters` monotonic `blocksRendered`, sine block parity @1e-5 rel. P3: chain/block-size matrix, v0-migrate + save/open round trip over `tmp_path`, channel agreement. |
+| `test_engine_parity.py` (NEW/EDIT) | P1: version lockstep (stamp==`__version__`, schema const, compat truth table); validate decision lockstep ×5 fixtures; migrate **normalized** equality v0→2/v1→2; project **canonical-form** round-trip + getters ×2 fixtures (+1 non-ASCII case). P2: audio anchors — `(-6,0)→0.501187`, `(-6,+6)→1.0`, `(+6,0)→1.995262+clip`, silence→`truePeakLinear 0.0`/`truePeakDb null`, `reset_meters` monotonic `blocksRendered`, sine block parity (≤1e-5 rel). P3: chain/block-size matrix, v0-migrate + save/open round trip over `tmp_path`, channel agreement. |
 
 Expected totals: ~12 → ~20 (P1) → ~23 (P2) → ~26–30 (P3/P4). Growth is fine
 when evidence-first; the DoD records the final number.
@@ -682,8 +787,9 @@ cmake --build native/build-asan -j2 && ctest --test-dir native/build-asan --outp
 
 # Shared lib artifact (P1+)
 ls -l native/build/libsoundforge.so native/build-asan/libsoundforge.so
-nm -D --defined-only native/build/libsoundforge.so | grep -c ' T sf_'        # >= 39
+nm -D --defined-only native/build/libsoundforge.so | grep ' T sf_'           # incl. EVERY §3.3 wrapped symbol (65 total; explicit name list, not a bare ≥39 count — ORC-G6-13)
 nm -D --defined-only native/build/libsoundforge.so | grep ' sf_error_string' # must be EMPTY (not exported)
+nm -D --defined-only native/build-asan/libsoundforge.so | grep -c ' T sf_'   # 65 — UBSan artifact exports the same surface
 
 # Parity + legacy pytest — reg default, UBSan override (D6)
 python3 -m pytest tests/python_tests -q                                                   # ~26-30 pass
@@ -709,24 +815,28 @@ All true on `main` (after P4):
 
 1. **Builds:** ctest green on `native/build` (reg) **and** `native/build-asan`
    (UBSan) — **314/314 each, unchanged**; pytest green (~26–30);
-   `libsoundforge.so` present in both trees; `nm -D` shows ≥39 `sf_` exports
-   with default visibility and **no** `sf_error_string`.
+   `libsoundforge.so` present at the build root of both trees; `nm -D` shows
+   **all** §3.3 wrapped symbols (65 exported) with default visibility and
+   **no** `sf_error_string`.
 2. **No drift:** `project_schema.json` byte-identical to `schema_golden_v2.json`;
    both pins untouched; `schema_golden_v1.json` untouched; schemaVersion **2**;
    no wire/ABI/header change; no new `SF_E_*` (still 7).
 3. **Parity evidence:** the lockstep suite passes **against both reg and UBSan
    `.so` builds** (D6): version/schema lockstep, validate decision parity on
-   the shared corpus, migrate dict-equality, project round-trip, and audio
+   the shared corpus, migrate **normalized** dict-equality (UUID/ts masked,
+   `engineVersion` strict), project **canonical-form** round-trip, and audio
    tick→meter/block parity at the documented anchors (0.501187 / 1.0 /
-   1.995262+clip / null-silence) and tolerances (1e-3 meter, 1e-5 rel block).
+   1.995262+clip / **0.0-linear+null-dB** silence) and per-surface tolerances
+   (meter 1e-3; DC block ≤ 1e-6 abs; sine block ≤ 1e-5 rel).
 4. **No new JNI / no Android:** `app/**` untouched; export grep **26**; host
    target guarded out of Android toolchains.
 5. **Version stamp `0.1.0-g6`** on all **seven** §4.2 surfaces, both
    reconfigured caches, `-R Version` 4/4, and the C-ABI stamp == Python
    `__version__` (test-enforced).
 6. **Native layer untouched:** zero edits under `native/src/**` except the two
-   P4 version-string files; `tests/unit/**` untouched; `sf_unit_tests` link set
-   unchanged.
+   P4 version-string files and the P1 `src/host/` addition (CMakeLists.txt +
+   generated 1-line anchor TU — build config only, no engine logic);
+   `tests/unit/**` untouched; `sf_unit_tests` link set unchanged.
 7. **Docs:** this plan + `docs/RELEASE_NOTES_G6.md` (decisions, anchors,
    residuals, P0–P4 commits); tree clean; tag `g6-complete`.
 
@@ -738,9 +848,9 @@ All true on `main` (after P4):
 |---|---|---|---|
 | R1 | ctypes signature drift vs headers (wrong argtype/restype silently corrupts) | MED | Every binding declared from one header-annotated table with explicit `argtypes`/`restype` (no default conversions); parity suite doubles as ABI smoke test (deterministic compares catch garbage); `nm` gate catches missing/hidden exports. |
 | R2 | `.so` missing on a source-only checkout → parity tests fail unhelpfully | LOW | Lazy load + D3 `RuntimeError` naming both search paths and the build hint; `import soundforge_py.engine` never fails; 12 legacy tests stay green without a native build. |
-| R3 | UBSan-instrumented `.so` dlopen friction in Python | LOW | D6: this tree is UBSan-only (no ASan ordering problem); `-fno-sanitize-recover=all` makes UB a loud abort = red run. Degrade path documented (reg-only parity + UBSan compile coverage) if the environment proves otherwise at P1. |
+| R3 | UBSan-instrumented `.so` dlopen friction in Python | LOW | D6: this tree is UBSan-only (no ASan ordering problem — oracle-verified); `-fno-sanitize-recover=all` makes UB a loud abort = red run. P1 must confirm the `SOUNDFORGE_LIB_PATH` override actually loads the UBSan build before the documented degrade path (reg-only parity + UBSan compile coverage) may be relied on. |
 | R4 | float64 reference vs float32 engine divergence exceeds tolerance | LOW | Relative block tolerance 1e-5 + DC/fixed-sine fixtures chosen away from denormals/phase edges; meter tolerance 1e-3 mirrors the native unit tests exactly. |
-| R5 | Link-time surprise linking five statics into one `.so` demands a TU edit | LOW-MED | Pure link/packaging target over unchanged libs (D2); **whole-archive semantics mandated so all C-ABI objects are exported** (amendment); `stdc++fs` + `Threads::Threads` included; PIC already ON; the D1 `nm` gate catches an empty export table immediately. Any required TU edit escalates to orchestrator + oracle (asserted in §1.3), never a silent amendment. |
+| R5 | Link-time surprise linking five statics into one `.so` demands a TU edit | LOW-MED | Pure link/packaging target over unchanged libs (D2); **whole-archive semantics mandated and probe-verified** — off → 0 exports, on → 65 (ORC-G6-17); no duplicate-definition link hazard reproducible; the corrected CMake form (anchor TU, `find_package(Threads)`, `LIBRARY_OUTPUT_DIRECTORY`) is specified in D2; `stdc++fs` + `Threads::Threads` included; PIC already ON; the D1 `nm` gate catches an empty export table immediately. Any required TU edit escalates to orchestrator + oracle (asserted in §1.3), never a silent amendment. |
 | R6 | Version drift between CMake cache stamp and Python `__version__` | LOW | Single P4 commit bumps all seven surfaces + two-cache reconfigure (G4/G5 precedent); `test_version_lockstep` makes drift a permanent test failure. |
 | R7 | One-shot engine lifecycle mishandled in pytest (leaked queue/engine ordering) | LOW | One fresh session per case; context managers enforce project→queue→engine create / reverse destroy (mirrors G4 caller-lifetime hazard); no engine shared across cases. |
 | R8 | Parity count growth or runtime creep | LOW | Suite is seconds-scale (≤512-frame ticks, 1–9 ticks/case like the unit tests); matrix bounded in P3; DoD records final count. |
@@ -757,7 +867,7 @@ All true on `main` (after P4):
 | G4-2 | True peak not BS.1770-certified | **STANDS** — unchanged |
 | G4-3 | Pacer timing best-effort | **STANDS** — unchanged (parity uses deterministic tick, never the pacer) |
 | G4-7 | Independent two-reviewer gate | **RESOLVED** (G4/G5 precedent; G6 repeats the process on this plan) |
-| G4-10 | Callback error paths | **STANDS** — unchanged; parity observes the documented callback contract via ctypes |
+| G4-10 | Callback error paths | **STANDS** — unchanged; parity observes the documented callback contract via ctypes (SEC-G6-05: try/except → `SF_E_IO`, per-session error list; callbacks run on the caller thread only — tick-only, no pacer — so the header's lock-free/alloc-free advisory is not exercised from Python; new residual G6-8) |
 | G5-1 | G4-5 plan memory not hardened | **STANDS** — unchanged |
 | G5-2 | Live retarget best-effort timing | **STANDS** — unchanged (parity exercises the static set_output path only) |
 | G5-3 | Unknown target → valid plan rendering silence | **STANDS** — unchanged; parity's silence case (null io) is distinct from unknown-target silence |
@@ -768,11 +878,13 @@ All true on `main` (after P4):
 |---|---|---|---|
 | G6-1 | Reference engine is chain-gain-only (no pan/mixer/multi-source/TruePeak-FIR); sine meter parity not covered | LOW | Boundary documented in `reference/engine.py` + release notes. Grows into the deferred NumPy-grade engine later without breaking the parity contract (DC meter + block parity stay exact). |
 | G6-2 | ctypes wrapper covers ≈39 of ≈60 exports; diagnostics, geometry, graph mutators, `apply_batch`, standalone queue runner, enqueue/dequeue unwrapped | LOW | Explicit scope boundary; later gates add tables to `engine.py`. Parity only wraps what parity exercises. |
-| G6-3 | No pip packaging/entry points/install target; pytest runs from the source tree | LOW | Matches project convention; a packaging gate can add `pip install -e python` + console scripts later. |
+| G6-3 | No pip packaging/entry points/install target; pytest runs from the source tree | LOW | Matches project convention; a packaging gate can add `pip install -e python` + console scripts later. **SEC-G6-09:** before packaging/console scripts, re-review the `SOUNDFORGE_LIB_PATH` dlopen posture (SEC-G6-01) and `RTLD_LOCAL` choice — the loader would move from test-only to installed-library consumption. |
 | G6-4 | `python/data_import/` remains a stub | LOW | Belongs to the native measurement-import lane, not G6. |
 | G6-5 | `app/src/main/cpp/CMakeLists.txt` keeps stale `0.1.0-g0` stamp | LOW | App metadata is Android-static-review-only; host engine stamp governs G6. Sync deferred to a future Android-facing gate. |
 | G6-6 | Python `migrate.py`/`schema.py` remain mirrors, not forks | LOW | Lockstep is *test-enforced* by the P1 parity cases; any future spec change must land both sides in one commit or the suite fails. |
 | G6-7 | TSan build (`build-tsan`) excluded from parity | LOW | TSan-instrumented libraries cannot be dlopened into an uninstrumented process; engine threading already unit-covered. |
+| G6-8 | Parity callbacks bypass the header's lock-free/alloc-free advisory (sf_audio_engine.h:49–51) | LOW | CPython callbacks allocate a frame + take the GIL. Safe here: parity uses `start(0)` (no pacer), callbacks run on the calling Python thread (ORC-G6-11, SEC-G6-05). A future gate wrapping PACE must treat callbacks as native-thread + GIL-safe. |
+| G6-9 | Native codec drops `signalGraph.mixers` on to_json (known-lossy round-trip for `dspchain_v2`) | LOW | Pre-existing native gap (json_codec.cpp:124–127,236–240 validates but never writes `mixers` back); `dspchain_v2` excluded from the round-trip corpus; tracked here for a future native gate (ORC-G6-07). |
 
 ### 9.3 Open questions — for the final two-reviewer gate (to be resolved in §10)
 
@@ -792,34 +904,55 @@ All true on `main` (after P4):
 
 ---
 
-## 10. Gate Record Template (filled after the two-reviewer gate)
+## 10. Gate Record — two-reviewer gate, landed (2026-09-15)
 
-### 10.1 P0 gate — oracle verdict (out-of-band, TBD)
-
-| ID | Sev | Finding | Amendment landed |
-|---|---|---|---|
-| ORC-G6-01 | — | *TBD* | |
-| ORC-G6-02 | — | *TBD* | |
-| … | | | |
-
-### 10.2 P0 gate — security reviewer verdict (out-of-band, TBD)
+### 10.1 P0 gate — oracle verdict (out-of-band, AMEND — landed)
 
 | ID | Sev | Finding | Amendment landed |
 |---|---|---|---|
-| SEC-G6-01 | — | *TBD* | |
-| SEC-G6-02 | — | *TBD* | |
-| … | | | |
+| ORC-G6-01 | HIGH | Source-less `SHARED` target cannot configure (CMake 4.4.3 probe: "No SOURCES given to target: soundforge") — collides with "build config only" in §1.4 | §1.2/§1.3/§1.4 + D2 — 1-line anchor TU `host_stub.cpp` (generated by `file(GENERATE …)`), no engine logic |
+| ORC-G6-02 | HIGH | `Threads::Threads` not visible in `src/host/` (imported targets are directory-scoped; `find_package` only exists in src/core\|graph\|audio) | D2 — `find_package(Threads REQUIRED)` in `src/host/CMakeLists.txt` |
+| ORC-G6-03 | HIGH | Default artifact path is `build/src/host/libsoundforge.so`, not `build/libsoundforge.so` — every hardcoded consumer (D1/D3/D6/§6.4/DoD) would fail | D2 + §1.2 — `LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"` pin |
+| ORC-G6-04 | HIGH | Migrate dict-equality unimplementable: both migrators inject fresh UUIDs + wall-clock ms timestamps | D4/P1 — normalized compare (mask UUID-v4 + RFC3339 fields, auditLog as ordered tuples, `engineVersion` strict) |
+| ORC-G6-05 | HIGH | Silence assertion is against the wrong field: engine emits `truePeakLinear [0.0,0.0]`, `truePeakDb [null,null]` (not null linear) | D4/P2/DoD/§6.2 — silence → `truePeakLinear == 0.0` + `truePeakDb == null` |
+| ORC-G6-06 | MED | Round-trip "semantic equality" fails on `signalgraph_v2`: to_json always emits `dspPresetRef:null`/`gainDb:0.0` | D4/P1 — canonical-form idempotence (`to_json(from_json(X))` pass1==pass2==pass3), no raw-bytes compare |
+| ORC-G6-07 | MED | `dspchain_v2` round-trip is lossy: native codec drops `signalGraph.mixers` | P1 + residual G6-9 — excluded from round-trip corpus; scrub "on v2 fixtures" wording |
+| ORC-G6-08 | MED | Migrate buffer sizing unspecified; naive `create_string_buffer(raw)` → `SF_E_NOMEM` (pretty ≈15.6× minified) | D3 — `max(8*len(raw), 1<<16)` or NOMEM-retry doubling; `*inout_len` excludes NUL, cap = buffer size |
+| ORC-G6-09 | MED | Getter-lockstep ambiguity: `sf_project_get_engine_version` returns the fixture's stamp (`0.1.0-g1`), never `__version__` | P1 — compare to fixture's own `engineVersion`; only `sf_engine_version()` vs `__version__` |
+| ORC-G6-10 | MED | Tolerance contradiction (`1e-3/1e-6` vs `1e-5 rel`) in D4 vs P2 | D4/P2 — per-surface: meter 1e-3; DC block ≤1e-6 abs (unit-test parity); sine block ≤1e-5 rel — `regression/engine_parity.py` single source |
+| ORC-G6-11 | MED | Python CFUNCTYPE callbacks violate the header's lock-free/alloc-free advisory | §9.2 G6-8 residual — safe (start(0), no pacer, caller thread); future PACE gate must be GIL-safe |
+| ORC-G6-12 | LOW | Version surface #2 edits only `SF_BUILD_VERSION`; adjacent comment history + `g5+build.123` example also stale | §4.2 surface #2 — bump history line (G5 precedent ORC-G5-06) |
+| ORC-G6-13 | LOW | Wrapped-count bookkeeping wrong ("6 getters" → 4) + `≥39` nm gate is weak (65 export) | D3 table + D1/§6.4/DoD — explicit wrapped-name-list gate |
+| ORC-G6-14 | INFO | `char** out_json` free trap: `out.contents` raises AttributeError on `c_char_p`; free via `cast(out, c_void_p)` | D3 — documented in `_take_string` row |
+| ORC-G6-15 | INFO | `-R Version` 4/4 includes `Migration.V0ToV1SchemaVersionOne` (substring) | No action — accepted, matches G5 |
+| ORC-G6-16 | INFO | Validator-divergence escalation risk retired: decision parity holds on **all 9** fixtures (probe) | P1 — noted; 5-fixture corpus fine, full corpus also passes |
+| ORC-G6-17 | INFO | Whole-archive probe: off → 0 `T sf_` exports; on → 65; bare-name form links clean (no duplicate-definition hazard); `<TARGET_FILE>`+push/pop form fails at generate time | D2 amendment text updated (drop duplicate-hazard implication) |
+
+### 10.2 P0 gate — security reviewer verdict (out-of-band, AMEND — landed)
+
+| ID | Sev | Finding | Amendment landed |
+|---|---|---|---|
+| SEC-G6-01 | MED | Env-controlled dlopen acceptable for dev/test harness (no install, no entry points) but must harden: reject non-absolute `SOUNDFORGE_LIB_PATH`, realpath-canonicalize + isfile-check | D3 loader — absolute-path enforcement + runtime error naming both candidate paths; loader documented test-only trust boundary |
+| SEC-G6-02 | MED | Pin `RTLD_LOCAL`; whole-archive exports the full mangled C++ surface — acceptable under LOCAL; never RTLD_GLOBAL | D3 loader + D6 rationale — explicit `ctypes.CDLL(path, mode=RTLD_LOCAL)`; future-ASan note kept |
+| SEC-G6-03 | MED | Length-parameter discipline: byte length, never char count — char-count len on non-ASCII JSON = OOB read in the .so | D3 — `_as_bytes()` helper for all JSON-entry calls + P1 non-ASCII (`café`) parity case |
+| SEC-G6-04 | MED | `sf_free_string` single-owner rule for string-outs; error strings valid only until next error-set (same-thread) | D3 — `_take_string()` sole free path; documented in engine docstring |
+| SEC-G6-05 | MED | io-callback contract: copy-within-call, try/except → `SF_E_IO` (never 0==SF_OK), channels==2 tripwire, CFUNCTYPE kept alive on wrapper | D4 mechanics + P2 acceptance — binding REQUIRED items |
+| SEC-G6-06 | LOW | No `__del__`/finalizers for auto-free; AudioEngine holds strong refs; destruction via context managers only | D3 acceptance + P2 — documented |
+| SEC-G6-07 | LOW | Parser differentials: feed identical bytes to both sides (single serialization); fixtures as raw bytes | D4 mechanics — byte-identity rule |
+| SEC-G6-08 | INFO | conftest/sys.path isolation confirmed: file-relative repo_root, session-scoped lazy fixture, no import-time engine load | D3 acceptance — conftest contract |
+| SEC-G6-09 | LOW | G6-3 residual upgrade: security-review trigger before pip packaging/console scripts (loader → installed consumption) | §9.2 G6-3 row annotated |
+| SEC-G6-10 | PASS | float64 reference vs float32 engine — no security issue (1e-5/1e-3 tolerances, fixtures away from denormals) | — |
 
 ### 10.3 Q&A table — two-reviewer gate
 
 | Question | Oracle verdict | Security verdict | Landed in |
 |---|---|---|---|
-| Q1 binding = ctypes | *TBD* | *TBD* | |
-| Q2 shared-lib guard + path contract | *TBD* | *TBD* | |
-| Q3 UBSan parity posture | *TBD* | *TBD* | |
-| Q4 reference scope (DC-only meter) | *TBD* | *TBD* | |
-| Q5 app stamp KEEP | *TBD* | *TBD* | |
+| Q1 binding = ctypes | APPROVE — surface already `extern "C"`; cffi/pybind11 add build coupling for zero coverage | Endorse — with SEC-G6-03/05 as binding constraints | D1 |
+| Q2 shared-lib guard + path contract | APPROVE **WITH AMENDMENT** — ORC-G6-01/02/03 mandatory fixes; no-install-target fine | Endorse — with SEC-G6-01/02 hardening REQUIRED | D2/D3 |
+| Q3 UBSan parity posture | APPROVE — verified UBSan-only (dlopen-safe, no LD_PRELOAD); TSan exclusion correct; P1 must confirm env-override actually loads build-asan | Endorse — dlopen-safe analysis verified | D6 |
+| Q4 reference scope (DC-only meter) | APPROVE — honest and exact; correct silence field (ORC-G6-05) + pin tolerance metric (ORC-G6-10) | Endorse — right boundary | D5/D4 |
+| Q5 app stamp KEEP | APPROVE — KEEP `0.1.0-g0` (G6-5); no 8th surface | Endorse — version hygiene only | §4.2 |
 
 ---
 
-*End of PLAN_G6.md (draft — scratch, uncommitted).*
+*End of PLAN_G6.md — amended post two-reviewer gate (ORC-G6-01..17 + SEC-G6-01..10 landed, 2026-09-15); P1-ready.*
