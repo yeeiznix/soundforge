@@ -474,7 +474,11 @@ callback errors.
   reference-computed values) and no sleeps/barriers: `tick` is documented
   deterministic (no wall clock), the suite completes in seconds.
 - Anchors (mirrored from the G5 fixture math, `test_audio_engine.cpp:931–945`
-  and D5; oracle re-verified via ctypes, prime or no prime): chain
+  and D5): meter-anchor is the **post-reset steady-state** value (after the
+  primed cyclus 8×tick → reset_meters → 1 tick, blocksRendered==9 — mirrors
+  test_audio_engine.cpp:534–550); **block-anchor applies on every tick**
+  (exact from tick 1, no priming needed); the cold-onset-overshoot (~×1.1259,
+  true-peak FIR-latch) persists until reset (ORC-G6-P2-05). Chain
   `src(-6 dB)→out(0 dB)`, output `out` → block samples and meter
   `truePeakLinear` **0.501187** (`10^(-6/20)`); chain `src(-6)→out(+6)` →
   **1.0** (`0.501187 × 10^(+6/20) = 0.501187 × 1.995262`); chain
@@ -969,6 +973,16 @@ All true on `main` (after P4):
 | Q4 reference scope (DC-only meter) | APPROVE — honest and exact; correct silence field (ORC-G6-05) + pin tolerance metric (ORC-G6-10) | Endorse — right boundary | D5/D4 |
 | Q5 app stamp KEEP | APPROVE — KEEP `0.1.0-g0` (G6-5); no 8th surface | Endorse — version hygiene only | §4.2 |
 
+### 10.4 P2 gate — Oracle amendments (deferred to P3, ORC-G6-P2-01..05)
+
+| ID | Phase | Scope | Status |
+|---|---|---|---|
+| ORC-G6-P2-01 | P2 | Audio teardown: `AudioEngine.__exit__` closes queue/project on destroy result | Committed in 3886ac2 |
+| ORC-G6-P2-02 | P3 | Reference engine: reject non-terminal `out_node_id` with `ValueError` (D5 chain-only boundary) | Pending P3 |
+| ORC-G6-P2-03 | P3 | Malformed graph: guard with `.get(..., [])`/`isinstance` checks; raise `ValueError` not `KeyError`/`TypeError` | Pending P3 |
+| ORC-G6-P2-04 | P3 | Out-of-scope surfaces: `solo == true` or `pan != 0` → `ValueError` ("out of D5 chain-gain scope") | Pending P3 |
+| ORC-G6-P2-05 | P3 | Meter-anchor wording: post-reset steady-state (8×tick + reset → 1 tick); block-anchor every tick; FIR-latch overshoot persists until reset | Committed in this amendment |
+
 ---
 
-*End of PLAN_G6.md — amended post two-reviewer gate (ORC-G6-01..17 + SEC-G6-01..10 landed, 2026-09-15); P1-ready.*
+*End of PLAN_G6.md — amended post two-reviewer gate (ORC-G6-01..17 + SEC-G6-01..10 landed, 2026-09-15); P1-ready. P2 gate record (ORC-G6-P2-01..05) added for P3 tracking.*
