@@ -2,6 +2,11 @@ name: G6 APK Preview Build
 
 on:
   workflow_dispatch:
+    inputs:
+      native_only:
+        description: 'Build native NDK only (skip Kotlin/APK). Proves the CMake repair on x86_64 NDK without touching the frozen Kotlin layer.'
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -66,13 +71,63 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
+      - name: Build native NDK only (x86_64, debug, no Kotlin)
+        if: inputs.native_only == 'true'
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/opencode
+          ./gradlew :app:buildCMakeDebug \
+            -Pandroid.useAndroidX=true \
+            --console=plain 2>&1 | tee /tmp/opencode/native-build.log || \
+          ./gradlew :app:externalNativeBuildDebug \
+            -Pandroid.useAndroidX=true \
+            --console=plain 2>&1 | tee /tmp/opencode/native-build.log
+          echo "native_log=/tmp/opencode/native-build.log" >> $GITHUB_ENV
+
+      - name: Locate native library (native-only)
+        if: inputs.native_only == 'true'
+        id: find_native
+        run: |
+          SO_PATH=$(find app/build -type f -name "libsfcore.so" | head -1)
+          if [ -z "$SO_PATH" ]; then
+            echo "ERROR: no libsfcore.so produced"
+            find app/build -type f -name "*.so" || true
+            exit 1
+          fi
+          echo "so_path=$SO_PATH" >> $GITHUB_OUTPUT
+          echo "Found native lib: $SO_PATH"
+
+      - name: Verify native library (native-only)
+        if: inputs.native_only == 'true'
+        run: |
+          SO_PATH="${{ steps.find_native.outputs.so_path }}"
+          ls -lh "$SO_PATH"
+          SIZE=$(stat -c%s "$SO_PATH")
+          if [ "$SIZE" -eq 0 ]; then
+            echo "ERROR: lib is 0 bytes"
+            exit 1
+          fi
+          echo "LIB size: $SIZE bytes"
+          echo "SHA-256:"
+          sha256sum "$SO_PATH"
+
+      - name: Upload native library artifact (native-only)
+        if: inputs.native_only == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: libsfcore-g6-debug
+          path: ${{ steps.find_native.outputs.so_path }}
+          retention-days: 30
+
       - name: Build APK (assembleDebug with AndroidX property)
+        if: inputs.native_only != 'true'
         run: |
           ./gradlew :app:assembleDebug \
             -Pandroid.useAndroidX=true \
             --console=plain
 
       - name: Find APK
+        if: inputs.native_only != 'true'
         id: find_apk
         run: |
           APK_PATH=$(find app/build/outputs -type f -name "*debug*.apk" | head -1)
@@ -85,6 +140,7 @@ jobs:
           echo "Found APK: $APK_PATH"
 
       - name: Verify APK
+        if: inputs.native_only != 'true'
         run: |
           APK_PATH="${{ steps.find_apk.outputs.apk_path }}"
           ls -lh "$APK_PATH"
@@ -98,7 +154,7 @@ jobs:
           sha256sum "$APK_PATH"
 
       - name: Upload APK artifact
-        if: success()
+        if: success() && inputs.native_only != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: SoundForge-G6-debug
@@ -119,5 +175,6 @@ jobs:
         if: success()
         run: |
           echo "=== BUILD SUCCESSFUL ==="
+          echo "Mode: native_only=${{ inputs.native_only }}"
           echo "APK: ${{ steps.find_apk.outputs.apk_path }}"
-          echo "Artifact: SoundForge-G6-debug"
+          echo "Artifact: SoundForge-G6-debug or libsfcore-g6-debug"
