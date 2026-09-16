@@ -79,7 +79,7 @@ val BuiltInVenuePresetDims: Map<String, Triple<Double, Double, Double>> = mapOf(
 
 class ProjectViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val repo = FileStorageRepository(File(application.filesDir))
+    private val repo = FileStorageRepository(application.filesDir)
 
     /**
      * Serializes all native-handle-touching work; close() joins via the same

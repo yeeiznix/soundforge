@@ -36,7 +36,7 @@ interface AudioCapabilityProbe {
  */
 class DefaultAudioCapabilityProbe : AudioCapabilityProbe {
 
-    override suspend fun probe(): Report = Report(
+    override suspend fun probe(): AudioCapabilityProbe.Report = AudioCapabilityProbe.Report(
         osVersion = "Android " + Build.VERSION.RELEASE + " (SDK " + Build.VERSION.SDK_INT + ")",
         abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown",
         lowLatencySupported = false,
@@ -45,7 +45,7 @@ class DefaultAudioCapabilityProbe : AudioCapabilityProbe {
         timestamp = isoTimestampUtc(),
     )
 
-    override fun formatForLog(r: Report): String =
+    override fun formatForLog(r: AudioCapabilityProbe.Report): String =
         "os=" + r.osVersion +
             " abi=" + r.abi +
             " lowLatency=" + r.lowLatencySupported +

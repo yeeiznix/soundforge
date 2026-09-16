@@ -292,14 +292,15 @@ private fun mixerStrip(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                if (node.dspPresetRef.isNotBlank()) {
+                val presetRef = node.dspPresetRef
+                if (presetRef != null && presetRef.isNotBlank()) {
                     AssistChip(
                         // Re-apply the referenced preset to the engine.
                         onClick = {
-                            onSetPreset(node.id, node.dspPresetRef)
+                            onSetPreset(node.id, presetRef)
                             afterCommit()
                         },
-                        label = { Text(text = "Preset: ${node.dspPresetRef}") },
+                        label = { Text(text = "Preset: $presetRef") },
                     )
                 }
             }

@@ -23,7 +23,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenu
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
@@ -42,7 +41,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.keyboard.KeyboardType
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import id.soundforge.pastudio.common.DirtyField
 import id.soundforge.pastudio.venue.VenueKt
@@ -67,13 +66,13 @@ private fun numericField(
 /** Best-effort "12.0" formatter for seeding numeric fields. */
 private fun fmt(v: Double): String {
     val s = v.toString()
-    return if (s.endsWith(".0")) s.substring(0, s.length() - 2) else s
+    return if (s.endsWith(".0")) s.substring(0, s.length - 2) else s
 }
 
 /** Tolerant parse; null on empty or malformed input (field stays amber). */
 private fun parseDim(s: String): Double? = runCatching {
     val t = s.trim().replace(',', '.')
-    if (t.isEmpty()) null else Double.parseDouble(t)
+    if (t.isEmpty()) null else t.toDoubleOrNull()
 }.getOrNull()
 
 /**
@@ -98,7 +97,7 @@ fun SceneEditorScreen(
     /** G3: renames the scene OBJECT via ProjectViewModel.sceneRename
      *  (sf_scene_rename) — distinct from [onRenameScene] (project rename). */
     onRenameSceneName: (String) -> Unit = {},
-    onUpdateGeometry: (Pt3, Pt3) -> Unit = {},
+    onUpdateGeometry: (Pt3, Pt3) -> Unit = { _: Pt3, _: Pt3 -> },
 ) {
     if (projectId == null) {
         Scaffold { padding ->
@@ -220,7 +219,7 @@ fun SceneEditorScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
             TextButton(
-                onClick = commitName,
+                onClick = { commitName() },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text(text = "Rename scene") }
             if (errorMessage != null) {
@@ -282,7 +281,7 @@ fun SceneEditorScreen(
                 )
             }
             Button(
-                onClick = commitGeometry,
+                onClick = { commitGeometry() },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text(text = "Apply scene geometry") }
         }

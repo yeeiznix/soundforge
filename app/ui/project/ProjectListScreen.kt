@@ -52,7 +52,7 @@ fun ProjectListScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val repo = remember { FileStorageRepository(File(context.filesDir)) }
+    val repo = remember { FileStorageRepository(context.filesDir) }
     var projects by remember { mutableStateOf<List<ProjectFile>>(emptyList()) }
     var showCreateDialog by remember { mutableStateOf(false) }
 

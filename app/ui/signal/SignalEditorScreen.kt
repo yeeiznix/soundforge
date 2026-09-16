@@ -27,7 +27,6 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenu
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
@@ -324,10 +323,11 @@ fun SignalEditorScreen(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                 }
-                                if (node.dspPresetRef.isNotBlank()) {
+                                val presetRef = node.dspPresetRef
+                                if (presetRef != null && presetRef.isNotBlank()) {
                                     AssistChip(
                                         onClick = {},
-                                        label = { Text(text = "Preset: ${node.dspPresetRef}") },
+                                        label = { Text(text = "Preset: $presetRef") },
                                     )
                                 }
                                 IconButton(

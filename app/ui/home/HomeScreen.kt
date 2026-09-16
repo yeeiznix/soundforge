@@ -47,7 +47,7 @@ fun HomeScreen(
     val context = LocalContext.current
     var showCreateDialog by remember { mutableStateOf(false) }
     var recent by remember { mutableStateOf<List<ProjectFile>>(emptyList()) }
-    val repo = remember { FileStorageRepository(File(context.filesDir)) }
+    val repo = remember { FileStorageRepository(context.filesDir) }
 
     // Read engine identity once per composition; tolerate a missing native lib.
     val engineInfo = remember {

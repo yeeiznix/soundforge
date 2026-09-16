@@ -25,10 +25,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.keyboard.KeyboardType
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 
 /** Numeric-decimal TextField; the engine validates finite, >0 dimensions. */
@@ -51,13 +53,13 @@ private fun venueNumericField(
 /** Best-effort "12.0" formatter for seeding numeric fields. */
 private fun fmt(v: Double): String {
     val s = v.toString()
-    return if (s.endsWith(".0")) s.substring(0, s.length() - 2) else s
+    return if (s.endsWith(".0")) s.substring(0, s.length - 2) else s
 }
 
 /** Tolerant parse; null on empty or malformed input. */
 private fun parseDim(s: String): Double? = runCatching {
     val t = s.trim().replace(',', '.')
-    if (t.isEmpty()) null else Double.parseDouble(t)
+    if (t.isEmpty()) null else t.toDoubleOrNull()
 }.getOrNull()
 
 /**
@@ -172,7 +174,7 @@ fun VenueScreen(
                 )
             }
             Button(
-                onClick = commit,
+                onClick = { commit() },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text(text = "Apply venue changes") }
             TextButton(
