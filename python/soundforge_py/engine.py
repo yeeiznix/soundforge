@@ -1,5 +1,5 @@
 # SoundForge G6 — ctypes loader + bindings for the host shared library.
-# (PLAN_G6.md §3.2 D2, §3.3 D3, P1 phase.)
+# (PLAN_G6.md §3.2 D2, §3.3 D3, P1 + P2 phases.)
 """Stdlib-only ctypes binding to libsoundforge.so (host-side Python layer).
 
 Lazy-load access to the C ABI via ``ctypes.CDLL``. Importing this module never
@@ -21,9 +21,10 @@ Security posture (SEC-G6-01/02/08):
     ``.so``'s internal mangled C++ symbols can neither interpose on nor be
     interposed by other DSOs in the Python process.
 
-Wrapped surface (P1): version (3), schema (1), migration (1), project (17),
-string/error utils (3), command queue (2). The audio engine (11 exports) is P2
-— see the clearly marked stub section at the bottom.
+Wrapped surface (P1 + P2): version (3), schema (1), migration (1), project
+(17), string/error utils (3), command queue (2), audio engine (11). The audio
+engine bindings land in P2 together with the :class:`AudioEngine` context
+manager. ``sf_error_string`` is header-inline and deliberately **not** bound.
 
 Memory rules (SEC-G6-03/04/06):
   - ``_as_bytes`` derives the C length from the encoded bytes (byte length,
@@ -32,9 +33,10 @@ Memory rules (SEC-G6-03/04/06):
     ``string_at``, zero the pointer, ``sf_free_string`` exactly once. Raw
     ``char*`` never escapes this module.
   - No ``__del__``/finalizers anywhere — destruction is explicit via context
-    managers (``Project``, ``CommandQueue``). Create order **project → queue →
-    engine**; destroy in reverse (``AudioEngine`` arrives in P2 and will hold
-    strong references to its queue and project).
+    managers (``Project``, ``CommandQueue``, ``AudioEngine``). Create order
+    project → queue → engine; destroy in reverse (engine → queue → project,
+    SEC-G6-06). ``AudioEngine`` holds strong references to its queue and
+    project.
 
 Errors: ``sf_error_string`` is header-inline and **not** exported. After a
 failing call read ``last_error(handle)`` / ``last_error_global()`` same-thread,
@@ -51,8 +53,10 @@ from ctypes import (
     POINTER,
     c_char_p,
     c_double,
+    c_float,
     c_int32,
     c_size_t,
+    c_uint32,
     c_void_p,
     cast,
     create_string_buffer,
@@ -72,12 +76,23 @@ __all__ = [
     "last_error_global",
     "Project",
     "CommandQueue",
+    "AudioEngine",
+    "AudioEngineConfig",
+    "AudioEngineIo",
+    "ReadIoFn",
+    "WriteIoFn",
+    "SF_AUDIO_ENGINE_PACE",
 ]
 
 # REPO_ROOT resolved file-relatively: python/soundforge_py/engine.py -> repo.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 SF_OK = 0
+SF_E_IO = 5
+
+# SF_AUDIO_ENGINE_PACE flag (sf_audio_engine.h). P2 tests drive ticks
+# deterministically with start(0) — no pacer thread.
+SF_AUDIO_ENGINE_PACE = 0x1
 
 
 class SfError(RuntimeError):
@@ -141,6 +156,38 @@ def _find_lib_path() -> str:
     )
 
 
+# --- Audio engine callback + config types (ctypes mirrors of the C ABI) ----
+
+# float* const* — host-only device protocol (never crosses JNI).
+_FloatPtr = POINTER(c_float)
+_FloatPtrPtr = POINTER(_FloatPtr)
+
+# Host device callbacks (sf_audio_engine.h lines 52-63): read fills the next
+# input block, write consumes the rendered output block. Both run on the
+# engine's render lane; both return int32 (SF_OK / SF_E_IO).
+ReadIoFn = ctypes.CFUNCTYPE(c_int32, c_void_p, _FloatPtrPtr, c_int32, c_int32)
+WriteIoFn = ctypes.CFUNCTYPE(c_int32, c_void_p, _FloatPtrPtr, c_int32, c_int32)
+
+
+class AudioEngineIo(ctypes.Structure):
+    """``sf_audio_engine_io_t``: user pointer + read/write callbacks."""
+    _fields_ = [
+        ("user", c_void_p),
+        ("read", ReadIoFn),
+        ("write", WriteIoFn),
+    ]
+
+
+class AudioEngineConfig(ctypes.Structure):
+    """``sf_audio_engine_config_t``: sample_rate/channels/max_block_frames/io."""
+    _fields_ = [
+        ("sample_rate", c_int32),
+        ("channels", c_int32),
+        ("max_block_frames", c_int32),
+        ("io", AudioEngineIo),
+    ]
+
+
 # (symbol, argtypes, restype) — explicit signatures for EVERY wrapped symbol.
 _SIGNATURES = [
     # Version (sf_version.h).
@@ -176,6 +223,18 @@ _SIGNATURES = [
     # Command queue (create/destroy only; engine binds a caller-owned queue).
     ("sf_cmd_queue_create", [POINTER(c_void_p)], c_int32),
     ("sf_cmd_queue_destroy", [c_void_p], None),
+    # Audio engine (P2; sf_audio_engine.h — all 11 exports).
+    ("sf_audio_engine_create", [POINTER(c_void_p), c_void_p, c_void_p], c_int32),
+    ("sf_audio_engine_destroy", [c_void_p], c_int32),
+    ("sf_audio_engine_configure", [c_void_p, POINTER(AudioEngineConfig)], c_int32),
+    ("sf_audio_engine_set_output", [c_void_p, c_char_p], c_int32),
+    ("sf_audio_engine_start", [c_void_p, c_uint32], c_int32),
+    ("sf_audio_engine_stop", [c_void_p], c_int32),
+    ("sf_audio_engine_join", [c_void_p], c_int32),
+    ("sf_audio_engine_tick", [c_void_p, c_size_t], c_int32),
+    ("sf_audio_engine_last_report", [c_void_p, c_char_p, c_size_t], c_int32),
+    ("sf_audio_engine_meter_json", [c_void_p, c_char_p, c_size_t], c_int32),
+    ("sf_audio_engine_reset_meters", [c_void_p], c_int32),
 ]
 
 
@@ -517,7 +576,200 @@ class CommandQueue:
         self.close()
 
 
-# --- Audio engine (P2 — intentionally NOT bound yet) ----------------------
-# PLAN_G6.md §3.3 wraps the 11 sf_audio_engine_* exports in P2, together with
-# the AudioEngine context manager, CFUNCTYPE read/write io callbacks, and the
-# dc/sine signal-source + block-capture helpers. Do not add them in P1.
+# --- Audio engine wrapper (P2) --------------------------------------------
+#
+# Callback contract (SEC-G6-05): io callbacks copy data **within the call**
+# (the read fills per-channel views; the write copies the rendered block out
+# immediately) and never retain/dereference engine-owned pointers after
+# return. Bodies are wrapped in try/except: on exception the callback records
+# the error in its per-session error list and returns SF_E_IO (never lets it
+# escape — ctypes would print and return 0 == SF_OK, treating a half-filled
+# input as valid). ``channels == 2`` and ``frames >= 1`` are asserted at the
+# top of every callback. The concrete read/write callbacks (DC/sine sources,
+# block capture) live in ``python/regression/engine_parity.py``; the CFUNCTYPE
+# instances are kept alive as attributes of this wrapper for the engine
+# lifetime (the native side stores raw function pointers; dropping the
+# CFUNCTYPE would be a dangling pointer on the next tick).
+
+
+class AudioEngine:
+    """Context-manager wrapper over ``sf_audio_engine_t`` (SEC-G6-06).
+
+    Lifecycle: create → configure → set_output → start(0) → tick* →
+    stop → join → destroy (one-shot, like the runner). Holds **strong refs**
+    to its queue and project; ``__exit__`` destroys in reverse order
+    (engine → queue → project). No ``__del__`` — destruction is explicit.
+
+    Usage::
+
+        with Project.from_json(raw) as p:
+            with CommandQueue.create() as q:
+                with AudioEngine.create(q, p) as e:
+                    e.configure(sample_rate=48000, channels=2,
+                                max_block_frames=256,
+                                read_cb=src.cb, write_cb=cap.cb)
+                    e.set_output("out")
+                    e.start(0)          # no pacer — tick is deterministic
+                    e.tick(256)
+                    e.stop()
+                    e.join()
+    """
+
+    def __init__(self, handle: int, queue: CommandQueue, project: Project) -> None:
+        self._h = int(handle)
+        self._q = queue  # strong ref — must outlive engine (SEC-G6-06)
+        self._p = project  # strong ref — must outlive engine (SEC-G6-06)
+        # CFUNCTYPE instances kept alive for the engine lifetime (SEC-G6-05):
+        # the native side stores raw function pointers. NULL function pointers
+        # (``cast(c_void_p(), ReadIoFn)`` — ctypes won't store None in a
+        # CFUNCTYPE-typed struct field) represent the legal "no io callback"
+        # silence path (unit test NullIoCallbacksAreSilentAndValid).
+        self._read_cb: ReadIoFn = cast(c_void_p(), ReadIoFn)
+        self._write_cb: WriteIoFn = cast(c_void_p(), WriteIoFn)
+
+    # -- construction ------------------------------------------------------
+    @classmethod
+    def create(cls, queue: CommandQueue, project: Project) -> "AudioEngine":
+        """Bind queue + project and allocate the engine (CREATED state)."""
+        out = c_void_p()
+        code = int(
+            _binding("sf_audio_engine_create")(
+                ctypes.byref(out), c_void_p(queue._h), c_void_p(project._h)
+            )
+        )
+        if code != SF_OK:
+            raise SfError("sf_audio_engine_create", code, last_error_global())
+        return cls(out.value or 0, queue, project)
+
+    # -- configuration (CREATED state only) --------------------------------
+    def configure(
+        self,
+        sample_rate: int = 48000,
+        channels: int = 2,
+        max_block_frames: int = 512,
+        read_cb: ReadIoFn | None = None,
+        write_cb: WriteIoFn | None = None,
+    ) -> None:
+        """Configure sample_rate/channels/max_block_frames and io callbacks.
+
+        The callbacks (plain Python callables or CFUNCTYPE instances) are
+        wrapped in CFUNCTYPE and **retained on this wrapper** so the native
+        raw function pointers stay valid for the engine lifetime (SEC-G6-05).
+        """
+        self._read_cb = (
+            ReadIoFn(read_cb) if read_cb is not None else cast(c_void_p(), ReadIoFn)
+        )
+        self._write_cb = (
+            WriteIoFn(write_cb) if write_cb is not None else cast(c_void_p(), WriteIoFn)
+        )
+        io = AudioEngineIo(
+            user=None, read=self._read_cb, write=self._write_cb
+        )
+        cfg = AudioEngineConfig(
+            sample_rate=c_int32(sample_rate),
+            channels=c_int32(channels),
+            max_block_frames=c_int32(max_block_frames),
+            io=io,
+        )
+        code = int(
+            _binding("sf_audio_engine_configure")(
+                c_void_p(self._h), ctypes.byref(cfg)
+            )
+        )
+        if code != SF_OK:
+            raise SfError("sf_audio_engine_configure", code, self._err())
+
+    def set_output(self, out_node_id: str) -> None:
+        """Set the output node id for the render plan (CREATED state only)."""
+        code = int(
+            _binding("sf_audio_engine_set_output")(
+                c_void_p(self._h), out_node_id.encode("utf-8")
+            )
+        )
+        if code != SF_OK:
+            raise SfError("sf_audio_engine_set_output", code, self._err())
+
+    # -- lifecycle ---------------------------------------------------------
+    def start(self, flags: int = 0) -> None:
+        """Start the engine; ``flags=0`` = no pacer (deterministic ticks)."""
+        code = int(
+            _binding("sf_audio_engine_start")(c_void_p(self._h), c_uint32(flags))
+        )
+        if code != SF_OK:
+            raise SfError("sf_audio_engine_start", code, self._err())
+
+    def stop(self) -> None:
+        """Request a stop (RUNNING → STOPPING; idempotent)."""
+        code = int(_binding("sf_audio_engine_stop")(c_void_p(self._h)))
+        if code != SF_OK:
+            raise SfError("sf_audio_engine_stop", code, self._err())
+
+    def join(self) -> None:
+        """Reap pacer/runner threads (STOPPED; idempotent)."""
+        code = int(_binding("sf_audio_engine_join")(c_void_p(self._h)))
+        if code != SF_OK:
+            raise SfError("sf_audio_engine_join", code, self._err())
+
+    def tick(self, frames: int) -> None:
+        """Deterministic synthetic clock: render ``frames`` (RUNNING only)."""
+        code = int(
+            _binding("sf_audio_engine_tick")(c_void_p(self._h), c_size_t(frames))
+        )
+        if code != SF_OK:
+            raise SfError("sf_audio_engine_tick", code, self._err())
+
+    # -- meters / reports (safe in any state) ------------------------------
+    def meter_json(self, cap: int = 4096) -> str:
+        """Per-channel true-peak meter JSON (channels, oversample:4,
+        blocksRendered, truePeakLinear[2], truePeakDb[2], clipped[2],
+        planValid)."""
+        buf = create_string_buffer(cap)
+        code = int(
+            _binding("sf_audio_engine_meter_json")(
+                c_void_p(self._h), buf, c_size_t(cap)
+            )
+        )
+        if code != SF_OK:
+            raise SfError("sf_audio_engine_meter_json", code, self._err())
+        return buf.value.decode("utf-8") if buf.value else ""
+
+    def reset_meters(self) -> None:
+        """Zero the per-channel true-peak latches (FIR tails + blocksRendered
+        kept — blocksRendered stays monotonic, not reset)."""
+        code = int(_binding("sf_audio_engine_reset_meters")(c_void_p(self._h)))
+        if code != SF_OK:
+            raise SfError("sf_audio_engine_reset_meters", code, self._err())
+
+    def last_report(self, cap: int = 16384) -> str:
+        """Passthrough to the runner's last report (meter_json NEVER embedded)."""
+        buf = create_string_buffer(cap)
+        code = int(
+            _binding("sf_audio_engine_last_report")(
+                c_void_p(self._h), buf, c_size_t(cap)
+            )
+        )
+        if code != SF_OK:
+            raise SfError("sf_audio_engine_last_report", code, self._err())
+        return buf.value.decode("utf-8") if buf.value else ""
+
+    # -- teardown -----------------------------------------------------------
+    def close(self) -> None:
+        """Destroy the engine handle (idempotent). Must precede queue/project
+        destroy (reverse order, SEC-G6-06)."""
+        if self._h:
+            _binding("sf_audio_engine_destroy")(c_void_p(self._h))
+            self._h = 0
+
+    def __enter__(self) -> "AudioEngine":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        # Reverse create order: engine → queue → project (SEC-G6-06).
+        # Project.close/CommandQueue.close are idempotent, so wrapping the
+        # engine inside outer project/queue context managers is safe too.
+        self.close()
+        self._q.close()
+        self._p.close()
+
+    def _err(self) -> str:
+        return last_error(self._h)
