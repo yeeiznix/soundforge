@@ -15,10 +15,21 @@ set(SFCORE_SOURCES
     ${NATIVE_ROOT}/src/core/version.cpp
     ${NATIVE_ROOT}/src/core/uuid.cpp
     ${NATIVE_ROOT}/src/core/diagnostics.cpp
+    ${NATIVE_ROOT}/src/core/geometry.cpp
     ${NATIVE_ROOT}/src/core/schema.cpp
     ${NATIVE_ROOT}/src/core/json_codec.cpp
     ${NATIVE_ROOT}/src/core/migration.cpp
     ${NATIVE_ROOT}/src/core/project.cpp
+    ${NATIVE_ROOT}/src/core/command_queue.cpp
+    ${NATIVE_ROOT}/src/core/command_queue_thread.cpp
+    ${NATIVE_ROOT}/src/core/snapshot.cpp
+    ${NATIVE_ROOT}/src/graph/graph_abi.cpp
+    ${NATIVE_ROOT}/src/graph/graph.cpp
+    ${NATIVE_ROOT}/src/graph/routing.cpp
+    ${NATIVE_ROOT}/src/graph/dsp_render.cpp
+    ${NATIVE_ROOT}/src/graph/render_plan.cpp
+    ${NATIVE_ROOT}/src/dsp/law.cpp
+    ${NATIVE_ROOT}/src/dsp/kernels.cpp
 )
 
 # Version stamp — mirrors native/CMakeLists.txt (CI may override
@@ -35,6 +46,9 @@ target_include_directories(sfcore
     PRIVATE ${NATIVE_ROOT}/include
     PRIVATE ${NATIVE_ROOT}/third_party   # nlohmann/json single header
     PRIVATE ${CMAKE_CURRENT_BINARY_DIR}  # version_gen.h
+    PRIVATE ${NATIVE_ROOT}/src/core      # sf_internal.hpp (graph_abi.cpp TU)
+    PRIVATE ${NATIVE_ROOT}/src/graph     # graph_internal.hpp, render_plan.hpp
+    PRIVATE ${NATIVE_ROOT}/src/dsp       # dsp_internal.hpp (RenderPlan/AudioBlock)
 )
 
 target_compile_features(sfcore PRIVATE cxx_std_20)
@@ -48,5 +62,6 @@ set_target_properties(sfcore PROPERTIES
 # the NDK toolchain disables both by default.
 target_compile_options(sfcore PRIVATE -fexceptions -frtti)
 
+find_package(Threads REQUIRED)  # std::thread in command_queue_thread.cpp
 find_library(android-log-lib log)
-target_link_libraries(sfcore PRIVATE ${android-log-lib})
+target_link_libraries(sfcore PRIVATE ${android-log-lib} Threads::Threads)
