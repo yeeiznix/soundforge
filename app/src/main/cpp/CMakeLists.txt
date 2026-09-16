@@ -62,6 +62,12 @@ set_target_properties(sfcore PROPERTIES
 # the NDK toolchain disables both by default.
 target_compile_options(sfcore PRIVATE -fexceptions -frtti)
 
+# project.cpp calls fsync() (POSIX) on !_WIN32. glibc exposes it through
+# transitively-included headers on desktop; Android Bionic does not, so the
+# NDK build fails with "undeclared identifier 'fsync'". Force the standard
+# header at compile level instead of touching the frozen native source.
+target_compile_options(sfcore PRIVATE -include unistd.h)
+
 find_package(Threads REQUIRED)  # std::thread in command_queue_thread.cpp
 find_library(android-log-lib log)
 target_link_libraries(sfcore PRIVATE ${android-log-lib} Threads::Threads)
