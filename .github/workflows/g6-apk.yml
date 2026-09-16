@@ -72,7 +72,7 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Build native NDK only (x86_64, debug, no Kotlin)
-        if: inputs.native_only == 'true'
+        if: (inputs.native_only == 'true' || inputs.native_only == true)
         run: |
           set -o pipefail
           mkdir -p /tmp/opencode
@@ -85,7 +85,7 @@ jobs:
           echo "native_log=/tmp/opencode/native-build.log" >> $GITHUB_ENV
 
       - name: Locate native library (native-only)
-        if: inputs.native_only == 'true'
+        if: (inputs.native_only == 'true' || inputs.native_only == true)
         id: find_native
         run: |
           SO_PATH=$(find app/build -type f -name "libsfcore.so" | head -1)
@@ -98,7 +98,7 @@ jobs:
           echo "Found native lib: $SO_PATH"
 
       - name: Verify native library (native-only)
-        if: inputs.native_only == 'true'
+        if: (inputs.native_only == 'true' || inputs.native_only == true)
         run: |
           SO_PATH="${{ steps.find_native.outputs.so_path }}"
           ls -lh "$SO_PATH"
@@ -112,7 +112,7 @@ jobs:
           sha256sum "$SO_PATH"
 
       - name: Upload native library artifact (native-only)
-        if: inputs.native_only == 'true'
+        if: (inputs.native_only == 'true' || inputs.native_only == true)
         uses: actions/upload-artifact@v4
         with:
           name: libsfcore-g6-debug
@@ -120,14 +120,14 @@ jobs:
           retention-days: 30
 
       - name: Build APK (assembleDebug with AndroidX property)
-        if: inputs.native_only != 'true'
+        if: (inputs.native_only != 'true' && inputs.native_only != true)
         run: |
           ./gradlew :app:assembleDebug \
             -Pandroid.useAndroidX=true \
             --console=plain
 
       - name: Find APK
-        if: inputs.native_only != 'true'
+        if: (inputs.native_only != 'true' && inputs.native_only != true)
         id: find_apk
         run: |
           APK_PATH=$(find app/build/outputs -type f -name "*debug*.apk" | head -1)
@@ -140,7 +140,7 @@ jobs:
           echo "Found APK: $APK_PATH"
 
       - name: Verify APK
-        if: inputs.native_only != 'true'
+        if: (inputs.native_only != 'true' && inputs.native_only != true)
         run: |
           APK_PATH="${{ steps.find_apk.outputs.apk_path }}"
           ls -lh "$APK_PATH"
@@ -154,7 +154,7 @@ jobs:
           sha256sum "$APK_PATH"
 
       - name: Upload APK artifact
-        if: success() && inputs.native_only != 'true'
+        if: success() && (inputs.native_only != 'true' && inputs.native_only != true)
         uses: actions/upload-artifact@v4
         with:
           name: SoundForge-G6-debug
