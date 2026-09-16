@@ -33,24 +33,35 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Locate preinstalled Android cmdline-tools
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls -la "$ANDROID_HOME/cmdline-tools" 2>&1 || true
+          SDKM=$(find "$ANDROID_HOME/cmdline-tools" -maxdepth 3 -name sdkmanager -type f | head -1)
+          test -n "$SDKM" || { echo "ERROR: no sdkmanager found"; exit 1; }
+          echo "SDKM=$SDKM" >> "$GITHUB_ENV"
+          "$SDKM" --version
+
+      - name: Accept Android SDK licenses
+        run: |
+          yes | "$SDKM" --licenses >/dev/null 2>&1 || true
+          true
 
       - name: Install Android platform API 34
         run: |
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-34"
+          yes | "$SDKM" "platforms;android-34" >/dev/null 2>&1 || { echo "platform 34 install failed"; exit 1; }
 
       - name: Install Android build-tools 34.0.0
         run: |
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "build-tools;34.0.0"
+          yes | "$SDKM" "build-tools;34.0.0" >/dev/null 2>&1 || { echo "build-tools install failed"; exit 1; }
 
-      - name: Install Android NDK (default for AGP 8.2)
+      - name: Install Android NDK (AGP 8.2 default)
         run: |
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;25.1.8937393"
+          yes | "$SDKM" "ndk;25.1.8937393" >/dev/null 2>&1 || { echo "NDK install failed"; exit 1; }
 
       - name: Install CMake 3.22.1
         run: |
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "cmake;3.22.1"
+          yes | "$SDKM" "cmake;3.22.1" >/dev/null 2>&1 || { echo "CMake install failed"; exit 1; }
 
       - name: Make gradlew executable
         run: chmod +x ./gradlew
