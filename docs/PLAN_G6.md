@@ -2,7 +2,8 @@
 # ctypes Layer over a Host Shared Library + Pure-Python Reference + Lockstep Suite
 
 > **Status: AMENDED — two-reviewer gate complete (oracle ORC-G6-01..17 +
-> security SEC-G6-01..10 landed, 2026-09-15); P1-ready.**
+> security SEC-G6-01..10 landed, 2026-09-15); P1 escalation landed
+> (ORC-G6-18, host guard → `NOT CMAKE_CROSSCOMPILING`, 2026-09-16); P1-ready.**
 > This document is the phase-0 plan contract for Gate G6. Reviewed and amendments
 > applied per the gate process (final two-reviewer gate: oracle +
 > security-reviewer, out-of-band) before P1. The plan specifies the
@@ -233,7 +234,12 @@ for the io callbacks) as the sole binding mechanism. No cffi, no pybind11, no
 
 ```cmake
 option(SF_BUILD_HOST_SHARED "Build host shared libsoundforge.so (Python ctypes layer)" ON)
-if(SF_BUILD_HOST_SHARED AND NOT ANDROID)
+# "Host-only" = NOT a cross-compilation. CMAKE_CROSSCOMPILING is the reliable
+# signal: it is TRUE only under explicit cross intent (toolchain file or
+# -DCMAKE_SYSTEM_NAME=...). NOT ANDROID is deliberately NOT used — this proot
+# environment reports ANDROID=1/CMAKE_SYSTEM_NAME=Android with native gcc and
+# no toolchain file, while CROSS=FALSE (ORC-G6-18 P1 escalation).
+if(SF_BUILD_HOST_SHARED AND NOT CMAKE_CROSSCOMPILING)
   add_subdirectory(src/host)
 endif()
 ```
@@ -243,8 +249,14 @@ and create `native/src/host/CMakeLists.txt`:
 ```cmake
 # G6 — host-only shared library for the Python ctypes parity layer.
 # Links the five existing STATIC libs unchanged; default visibility exports
-# the extern "C" surface. Android NEVER builds this target (guarded by
-# SF_BUILD_HOST_SHARED AND NOT ANDROID at the top level).
+# the extern "C" surface. Guarded at top level by
+# SF_BUILD_HOST_SHARED AND NOT CMAKE_CROSSCOMPILING: cross-compilations are
+# never "host" builds and are skipped. NB this proot env reports
+# ANDROID=1/SYSTEM_NAME=Android but CROSS=FALSE (native gcc, no toolchain
+# file), so the target DOES build here. Edge: NDK build from an Android host
+# also reports CROSS=FALSE and would build the target — accepted: the app CMake
+# never add_subdirectory's this tree, and on an Android host that .so IS the
+# correct host lib for ctypes (ORC-G6-18).
 find_package(Threads REQUIRED)          # imported target is directory-scoped —
                                         # does NOT leak from src/core|graph|audio (ORC-G6-02)
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/host_stub.cpp"
@@ -279,11 +291,11 @@ set_target_properties(soundforge PROPERTIES
 
 **Rationale.**
 - **Where it lives.** `src/host/` mirrors the existing per-module layout; the
-  top-level guard (`AND NOT ANDROID`) makes the "host-only" property explicit
-  and future-proof even if an Android build ever `add_subdirectory`s the native
-  tree (it does not today — `app/src/main/cpp/CMakeLists.txt` recompiles its
-  own source list and documents that it deliberately does NOT
-  `add_subdirectory`).
+  top-level guard (`NOT CMAKE_CROSSCOMPILING`, ORC-G6-18) makes the "host-only"
+  property explicit: a cross-compilation is never a host build and is skipped
+  even if an Android build ever `add_subdirectory`s the native tree (it does
+  not today — `app/src/main/cpp/CMakeLists.txt` recompiles its own source list
+  and documents that it deliberately does NOT `add_subdirectory`).
 - **Not disturbing anything.** `sf_unit_tests` keeps linking the statics as
   before (no target-name clash: the test binary links `sfcore` etc.; the new
   target is `soundforge`). The statics are already built with
@@ -775,8 +787,11 @@ when evidence-first; the DoD records the final number.
 - `grep -c '^Java_id_soundforge_pastudio_platform_bridge_NativeBridge_'` = **26**
   (G6 adds no JNI; re-verified every phase).
 - `app/**` is KEEP — no Kotlin, no `jni_bridge.cpp` change, no app CMake change.
-- New host target is guarded `AND NOT ANDROID`; nothing in the Android build
-  graph changes (verified: app CMake never `add_subdirectory`s the native tree).
+- New host target is guarded `NOT CMAKE_CROSSCOMPILING` (ORC-G6-18: proot
+  reports `ANDROID=1` with native gcc, so `ANDROID` is unusable as a guard
+  signal here; CROSS is TRUE only under explicit cross intent); nothing in the
+  Android build graph changes (verified: app CMake never `add_subdirectory`s
+  the native tree).
 
 ### 6.4 Verification command matrix (host)
 
@@ -927,6 +942,7 @@ All true on `main` (after P4):
 | ORC-G6-15 | INFO | `-R Version` 4/4 includes `Migration.V0ToV1SchemaVersionOne` (substring) | No action — accepted, matches G5 |
 | ORC-G6-16 | INFO | Validator-divergence escalation risk retired: decision parity holds on **all 9** fixtures (probe) | P1 — noted; 5-fixture corpus fine, full corpus also passes |
 | ORC-G6-17 | INFO | Whole-archive probe: off → 0 `T sf_` exports; on → 65; bare-name form links clean (no duplicate-definition hazard); `<TARGET_FILE>`+push/pop form fails at generate time | D2 amendment text updated (drop duplicate-hazard implication) |
+| ORC-G6-18 | MED | P1 blocker (fixer, reproduced by orchestrator): plan guard `AND NOT ANDROID` is false in this environment — CMake 4.4.3 under proot sets `ANDROID=1`/`CMAKE_SYSTEM_NAME=Android` as a non-cached normal variable despite native gcc and no toolchain file, so the host target never gets added. Probe: `CROSS=FALSE`, `HOST=Android SYS=Android` (host baked at CMake-build time) → `CMAKE_CROSSCOMPILING` is TRUE only under explicit cross intent | P1 escalation (§1.3, single-oracle consult 2026-09-16, endorse): guard → `NOT CMAKE_CROSSCOMPILING`; honest comments incl. Android-host edge (accepted: app never add_subdirectory's native tree); duplicate comment block in `native/CMakeLists.txt` removed; docs §3.2/§6.3 synchronized; no security surface touched (SEC-G6-01..10 unaffected) |
 
 ### 10.2 P0 gate — security reviewer verdict (out-of-band, AMEND — landed)
 
