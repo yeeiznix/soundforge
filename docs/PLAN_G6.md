@@ -783,8 +783,8 @@ the existing native coverage.
 | `test_schema_py.py` (KEEP) | 12 existing; untouched; golden SHA-256 pins intact. |
 | `test_engine_parity.py` (NEW/EDIT) | P1: version lockstep (stamp==`__version__`, schema const, compat truth table); validate decision lockstep ×5 fixtures; migrate **normalized** equality v0→2/v1→2; project **canonical-form** round-trip + getters ×2 fixtures (+1 non-ASCII case). P2: audio anchors — `(-6,0)→0.501187`, `(-6,+6)→1.0`, `(+6,0)→1.995262+clip`, silence→`truePeakLinear 0.0`/`truePeakDb null`, `reset_meters` monotonic `blocksRendered`, sine block parity (≤1e-5 rel). P3: chain/block-size matrix, v0-migrate + save/open round trip over `tmp_path`, channel agreement. |
 
-Expected totals: ~12 → ~20 (P1) → ~23 (P2) → ~26–30 (P3/P4). Growth is fine
-when evidence-first; the DoD records the final number.
+Expected totals: ~12 → ~20 (P1) → ~23 (P2) → ~26–30 (P3) → **46 final (P4 DoD)**.
+Growth is fine when evidence-first; actual split: 12 legacy + 34 parity.
 
 ### 6.3 Android (static-only)
 
@@ -978,10 +978,17 @@ All true on `main` (after P4):
 | ID | Phase | Scope | Status |
 |---|---|---|---|
 | ORC-G6-P2-01 | P2 | Audio teardown: `AudioEngine.__exit__` closes queue/project on destroy result | Committed in 3886ac2 |
-| ORC-G6-P2-02 | P3 | Reference engine: reject non-terminal `out_node_id` with `ValueError` (D5 chain-only boundary) | Pending P3 |
-| ORC-G6-P2-03 | P3 | Malformed graph: guard with `.get(..., [])`/`isinstance` checks; raise `ValueError` not `KeyError`/`TypeError` | Pending P3 |
-| ORC-G6-P2-04 | P3 | Out-of-scope surfaces: `solo == true` or `pan != 0` → `ValueError` ("out of D5 chain-gain scope") | Pending P3 |
+| ORC-G6-P2-02 | P3 | Reference engine: reject non-terminal `out_node_id` with `ValueError` (D5 chain-only boundary) | Landed in 7fc4bf3 |
+| ORC-G6-P2-03 | P3 | Malformed graph: guard with `.get(..., [])`/`isinstance` checks; raise `ValueError` not `KeyError`/`TypeError` | Landed in 7fc4bf3 |
+| ORC-G6-P2-04 | P3 | Out-of-scope surfaces: `solo == true` or `pan != 0` → `ValueError` ("out of D5 chain-gain scope") | Landed in 7fc4bf3 |
 | ORC-G6-P2-05 | P3 | Meter-anchor wording: post-reset steady-state (8×tick + reset → 1 tick); block-anchor every tick; FIR-latch overshoot persists until reset | Committed in this amendment |
+
+### 10.4a P3 gate — Oracle verdict (out-of-band, AMEND — landed)
+
+| ID | Sev | Finding | Landed in |
+|---|---|---|---|
+| ORC-G6-P3-01 | Sev-3 | `test_save_open_roundtrip` called `open_from_path` **never** — the on-disk open path (read_file_capped / checked_parse) was uncovered; open-path assertions added (name, schema, re-validate on both validators) | Landed in 2f8642d |
+| ORC-G6-P3-02 | Sev-3 | README §Test Coverage counts wrong (12 legacy mixed with parity; "~26–30" post-P3 stale) — corrected to 34 parity + 12 legacy = 46 (DoD records) | Landed in 2f8642d |
 
 ---
 

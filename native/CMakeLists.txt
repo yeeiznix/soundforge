@@ -7,10 +7,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# Version stamp (default; CI may override with -DSF_BUILD_VERSION="0.1.0-g5+build.123")
-# Gate history (PLAN_G5 §4.2): the planned G2 "-g2" bump never landed; G3 lands
-# "-g3" directly (G2 cache/default were left at "-g1"); G4 lands "-g4"; G5 lands "-g5".
-set(SF_BUILD_VERSION "0.1.0-g5" CACHE STRING "Engine version string")
+# Version stamp (default; CI may override with -DSF_BUILD_VERSION="0.1.0-g6+build.123")
+# Gate history (PLAN_G6 §4.2): the planned G2 "-g2" bump never landed; G3 lands
+# "-g3" directly (G2 cache/default were left at "-g1"); G4 lands "-g4"; G5 lands "-g5"; G6 lands "-g6".
+set(SF_BUILD_VERSION "0.1.0-g6" CACHE STRING "Engine version string")
 
 option(SF_BUILD_TESTS "Build native unit/integration tests" ON)
 option(SF_BUILD_HOST_SHARED "Build host shared libsoundforge.so (Python ctypes layer)" ON)

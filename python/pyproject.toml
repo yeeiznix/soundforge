@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "soundforge-py"
-version = "0.1.0-g0"
-description = "SoundForge G0 Python reference & tooling stubs"
+version = "0.1.0-g6"
+description = "SoundForge Python reference & tooling package"
 requires-python = ">=3.10"
 dependencies = ["jsonschema"]

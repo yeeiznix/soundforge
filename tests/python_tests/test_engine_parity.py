@@ -69,9 +69,9 @@ def _fixture_bytes(name: str) -> bytes:
 # --- version / schema lockstep --------------------------------------------
 
 def test_version_lockstep(soundforge_lib):
-    """Engine stamp == package __version__ == 0.1.0-g5 (pre-P4); schema == 2;
+    """Engine stamp == package __version__ == 0.1.0-g6 (P4); schema == 2;
     sf_is_compatible truth table {-1:0, 0:1, 1:1, 2:1, 3:0}."""
-    assert engine_version() == __version__ == "0.1.0-g5"
+    assert engine_version() == __version__ == "0.1.0-g6"
     assert schema_version() == SCHEMA_VERSION == 2
     for v, expect in ((-1, 0), (0, 1), (1, 1), (2, 1), (3, 0)):
         assert bool(is_compatible(v)) is bool(expect), f"is_compatible({v})"
@@ -153,7 +153,7 @@ def test_migrate_normalized_equality(soundforge_lib, from_ver: int):
 
     assert _normalize_migrated(native_doc) == _normalize_migrated(py_doc)
     # engineVersion is kept strict inside _normalize_migrated; pin the anchor:
-    assert native_doc["engineVersion"] == "0.1.0-g5"
+    assert native_doc["engineVersion"] == "0.1.0-g6"
     assert native_doc["schemaVersion"] == 2
 
 
@@ -741,7 +741,7 @@ def test_save_open_roundtrip_v0_fixture(soundforge_lib, tmp_path):
 
     # Verify schema and engine version preserved
     assert saved_doc["schemaVersion"] == 2
-    assert saved_doc["engineVersion"] == "0.1.0-g5"
+    assert saved_doc["engineVersion"] == "0.1.0-g6"
 
 
 def test_mono_stereo_channel_agreement(soundforge_lib):

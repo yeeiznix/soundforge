@@ -13,8 +13,9 @@ extern "C" {
 #define SF_ENGINE_VERSION_MINOR 1
 #define SF_ENGINE_VERSION_PATCH 0
 /* Gate suffix. Gate history: "-g1" (G1); the planned G2 bump to "-g2" never
-   landed, so G3 landed "-g3", G4 landed "-g4", G5 lands "-g5" (PLAN_G5 §4.2). */
-#define SF_ENGINE_VERSION_SUFFIX "-g5"
+   landed, so G3 landed "-g3", G4 landed "-g4", G5 lands "-g5" (PLAN_G5 §4.2),
+   G6 lands "-g6" (PLAN_G6 §4.2, P4). */
+#define SF_ENGINE_VERSION_SUFFIX "-g6"
 #define SF_SCHEMA_VERSION 2
 
 /* Default engine version string derived from the components above.
