@@ -755,21 +755,35 @@ class AudioEngine:
     # -- teardown -----------------------------------------------------------
     def close(self) -> None:
         """Destroy the engine handle (idempotent). Must precede queue/project
-        destroy (reverse order, SEC-G6-06)."""
+        destroy (reverse order, SEC-G6-06). Respects destroy result: only zeros
+        _h if SF_OK, ensuring runner thread is reaped before queue destroy."""
         if self._h:
-            _binding("sf_audio_engine_destroy")(c_void_p(self._h))
-            self._h = 0
+            # Ensure runner/pacer threads are stopped and reaped (idempotent).
+            try:
+                self.stop()
+            except SfError:
+                pass  # Already stopped or error state; proceed to join.
+            try:
+                self.join()
+            except SfError:
+                pass  # Already joined or error state; proceed to destroy.
+            # Destroy only clears handle on success; on SF_E_IO the engine is
+            # still owned and __exit__ will not cascade queue/project close.
+            code = int(_binding("sf_audio_engine_destroy")(c_void_p(self._h)))
+            if code == SF_OK:
+                self._h = 0
 
     def __enter__(self) -> "AudioEngine":
         return self
 
     def __exit__(self, *exc: object) -> None:
         # Reverse create order: engine → queue → project (SEC-G6-06).
-        # Project.close/CommandQueue.close are idempotent, so wrapping the
-        # engine inside outer project/queue context managers is safe too.
+        # close() only zeros _h on successful destroy; cascade queue/project
+        # close only if engine was actually freed (runner thread reaped).
         self.close()
-        self._q.close()
-        self._p.close()
+        if not self._h:  # Engine was freed; safe to destroy queue and project.
+            self._q.close()
+            self._p.close()
 
     def _err(self) -> str:
         return last_error(self._h)
