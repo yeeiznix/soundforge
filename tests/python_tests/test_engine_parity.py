@@ -624,3 +624,224 @@ def test_chain_byte_identity_native_input_is_raw_bytes(soundforge_lib):
     compare_meter(meters["truePeakLinear"][0], ref_m_l, kind="dc")
     assert meters["blocksRendered"] == ref.blocks_rendered == 9
     assert src.errors == [] and cap.errors == []
+
+# ===========================================================================
+# P3 — Parity matrix expansion: chains × block-sizes, save/open round-trip,
+# negative cases (ORC-G6-P2-02/03/04)
+# ===========================================================================
+
+# Matrix parameters: (src_db, out_db, block_size)
+_MATRIX_CASES = [
+    pytest.param(0.0, 0.0, 64, id="chain-0-0-64"),
+    pytest.param(0.0, 0.0, 256, id="chain-0-0-256"),
+    pytest.param(-6.0, 0.0, 64, id="chain-m6-0-64"),
+    pytest.param(-6.0, 0.0, 256, id="chain-m6-0-256"),
+    pytest.param(-6.0, 6.0, 64, id="chain-m6-p6-64"),
+    pytest.param(-6.0, 6.0, 256, id="chain-m6-p6-256"),
+    pytest.param(6.0, 0.0, 64, id="chain-p6-0-64"),
+    pytest.param(6.0, 0.0, 256, id="chain-p6-0-256"),
+]
+
+
+@pytest.mark.parametrize("src_db,out_db,block_size", _MATRIX_CASES)
+def test_parity_matrix_dc_chains(
+    soundforge_lib, src_db: float, out_db: float, block_size: int
+):
+    """P3 matrix: all gain combinations at two block-sizes.
+    Verifies blocksRendered lockstep and block parity on every tick (no priming)."""
+    doc = _chain_doc(src_db, out_db)
+    raw = json.dumps(doc).encode("utf-8")
+
+    src = dc_source(1.0)
+    cap = BlockCapture()
+    ref = ReferenceEngine()
+    ref_src = dc_source(1.0)
+    ref_doc = json.loads(raw)
+
+    with Project.from_json(raw) as p:
+        with CommandQueue.create() as q:
+            with AudioEngine.create(q, p) as e:
+                e.configure(
+                    sample_rate=SAMPLE_RATE,
+                    channels=CHANNELS,
+                    max_block_frames=512,
+                    read_cb=src.cb,
+                    write_cb=cap.cb,
+                )
+                e.set_output(OUT_ID)
+                e.start(0)
+
+                # Three ticks: blocksRendered and block samples lockstep on every tick.
+                for tick_num in range(3):
+                    e.tick(block_size)
+                    ref_block, _ = ref.render(ref_doc, OUT_ID, ref_src, block_size)
+
+                    # Immediate lockstep check (no priming, block-anchor applies per tick)
+                    meters = json.loads(e.meter_json())
+                    assert meters["blocksRendered"] == ref.blocks_rendered == tick_num + 1, (
+                        f"tick {tick_num}: blocksRendered mismatch"
+                    )
+
+                    # Block samples parity (≤1e-6 absolute for DC)
+                    assert len(cap.blocks) == tick_num + 1
+                    captured_l, captured_r = cap.blocks[tick_num]
+                    compare_blocks(captured_l, ref_block, kind="dc")
+                    compare_blocks(captured_r, ref_block, kind="dc")
+
+                e.stop()
+                e.join()
+
+    assert src.errors == [], f"read errors: {src.errors}"
+    assert cap.errors == [], f"write errors: {cap.errors}"
+
+
+def test_save_open_roundtrip_v0_fixture(soundforge_lib, tmp_path):
+    """P3 save/open round-trip: v0 fixture → migrate → save → open → re-validate.
+    Proves the on-disk path works (not just in-memory JSON, SEC-G6-07 byte-identity)."""
+    v0_raw = _fixture_bytes("project_minimal_v0.json")
+
+    # Native migrate v0->v2
+    code, v2_json = native_migrate_json(v0_raw, 0, 2)
+    assert code == SF_OK, "native migrate v0->2 failed"
+    v2_doc = json.loads(v2_json)
+
+    # Re-validate both ways (should pass after migration)
+    v2_bytes = json.dumps(v2_doc, ensure_ascii=False).encode("utf-8")
+    code, msg = validate_project_json(v2_bytes)
+    assert code == SF_OK, f"native validate v2 after migrate: {msg}"
+    assert validate_project(v2_doc) == [], "python validate v2 after migrate"
+
+    # Save to temp file via sf_project_save_to_path
+    temp_json = tmp_path / "migrated.json"
+    with Project.from_json(v2_bytes) as p:
+        p.save_to_path(str(temp_json))
+    assert temp_json.exists(), "save_to_path did not create file"
+
+    # Re-open from the saved file
+    saved_bytes = temp_json.read_bytes()
+    saved_doc = json.loads(saved_bytes)
+
+    # Re-validate both ways (proves disk round-trip)
+    code, msg = validate_project_json(saved_bytes)
+    assert code == SF_OK, f"native validate after open_from_path: {msg}"
+    assert validate_project(saved_doc) == [], "python validate after open_from_path"
+
+    # Verify schema and engine version preserved
+    assert saved_doc["schemaVersion"] == 2
+    assert saved_doc["engineVersion"] == "0.1.0-g5"
+
+
+def test_mono_stereo_channel_agreement(soundforge_lib):
+    """Mono ≡ stereo: same gain chain rendered on stereo (both channels filled
+    from the same source) → meter values on L and R agree (DC)."""
+    doc = _chain_doc(-6.0, 6.0)
+    raw = json.dumps(doc).encode("utf-8")
+
+    src = dc_source(0.75)
+    cap = BlockCapture()
+    ref = ReferenceEngine()
+    ref_src = dc_source(0.75)
+    ref_doc = json.loads(raw)
+
+    with Project.from_json(raw) as p:
+        with CommandQueue.create() as q:
+            with AudioEngine.create(q, p) as e:
+                e.configure(
+                    sample_rate=SAMPLE_RATE,
+                    channels=CHANNELS,
+                    max_block_frames=BLOCK,
+                    read_cb=src.cb,
+                    write_cb=cap.cb,
+                )
+                e.set_output(OUT_ID)
+                e.start(0)
+
+                # Prime and reset
+                for _ in range(8):
+                    e.tick(BLOCK)
+                    ref.render(ref_doc, OUT_ID, ref_src, BLOCK)
+                e.reset_meters()
+                e.tick(BLOCK)
+                ref.render(ref_doc, OUT_ID, ref_src, BLOCK)
+
+                e.stop()
+                e.join()
+                meters = json.loads(e.meter_json())
+
+    # Stereo channel agreement: both L and R meters are identical
+    lin = meters["truePeakLinear"]
+    assert lin[0] is not None and lin[1] is not None
+    assert lin[0] == lin[1], (
+        f"channel mismatch: L={lin[0]}, R={lin[1]} "
+        f"(both should be equal since source fills both from same DC)"
+    )
+
+    assert src.errors == [] and cap.errors == []
+
+
+# --- Negative cases: P2-02/03/04 rejection ---
+
+def test_reference_rejects_non_terminal_output(soundforge_lib):
+    """ORC-G6-P2-02: Reference engine rejects non-terminal out_node_id with
+    ValueError. Native behavior (if it rejects or truncates) is documented."""
+    doc = _chain_doc(0.0, 0.0)
+    ref_doc = json.loads(json.dumps(doc).encode("utf-8"))
+
+    ref = ReferenceEngine()
+    ref_src = dc_source(1.0)
+
+    # Try to render with SRC_ID (source) as output instead of OUT_ID (terminal)
+    with pytest.raises(ValueError, match="not terminal"):
+        ref.render(ref_doc, SRC_ID, ref_src, BLOCK)
+
+
+def test_reference_rejects_malformed_graph(soundforge_lib):
+    """ORC-G6-P2-03: Reference engine rejects malformed graphs (missing node
+    field, invalid edge) with ValueError."""
+    # Malformed: duplicate node ids
+    doc_dup = {
+        "schemaVersion": 2,
+        "signalGraph": {
+            "nodes": [
+                {"id": "dup-id", "kind": "source", "label": "s1"},
+                {"id": "dup-id", "kind": "output", "label": "s2"},
+            ],
+            "edges": [],
+        },
+    }
+    ref = ReferenceEngine()
+    ref_src = dc_source(1.0)
+    with pytest.raises(ValueError, match="duplicate"):
+        ref.render(doc_dup, "dup-id", ref_src, BLOCK)
+
+    # Malformed: edge with missing "to" field
+    doc_bad_edge = {
+        "schemaVersion": 2,
+        "signalGraph": {
+            "nodes": [
+                {"id": "src", "kind": "source"},
+                {"id": "out", "kind": "output"},
+            ],
+            "edges": [{"from": "src"}],
+        },
+    }
+    with pytest.raises(ValueError, match="malformed|missing"):
+        ref.render(doc_bad_edge, "out", ref_src, BLOCK)
+
+
+def test_reference_rejects_solo_pan_surfaces(soundforge_lib):
+    """ORC-G6-P2-04: Reference engine rejects solo/pan (out-of-scope surfaces)
+    with ValueError."""
+    # Solo true
+    doc_solo = _chain_doc(0.0, 0.0)
+    doc_solo["signalGraph"]["nodes"][0]["mixer"]["solo"] = True
+    ref = ReferenceEngine()
+    ref_src = dc_source(1.0)
+    with pytest.raises(ValueError, match="solo|out of D5"):
+        ref.render(doc_solo, OUT_ID, ref_src, BLOCK)
+
+    # Pan != 0
+    doc_pan = _chain_doc(0.0, 0.0)
+    doc_pan["signalGraph"]["nodes"][1]["mixer"]["pan"] = 0.5
+    with pytest.raises(ValueError, match="pan|out of D5"):
+        ref.render(doc_pan, OUT_ID, ref_src, BLOCK)

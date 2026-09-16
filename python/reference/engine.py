@@ -56,18 +56,26 @@ def _chain_order(graph: dict[str, Any], why: str) -> list[str]:
     shapes: duplicate ids, dangling edges, fan-in/fan-out > 1, multiple
     sources, disconnected/cyclic structure. Cycles are already rejected by
     validate — but the reference refuses with its own message anyway.
+
+    ORC-G6-P2-03: Malformed graphs (missing/invalid fields) raise ``ValueError``.
+    ORC-G6-P2-04: Out-of-scope surfaces (solo==true, pan!=0) raise ``ValueError``.
     """
     nodes = graph.get("nodes") or []
     edges = graph.get("edges") or []
-    ids = [n.get("id") for n in graph["nodes"] if isinstance(n, dict)]
+    ids = [n.get("id") for n in nodes if isinstance(n, dict)]
     if len(ids) != len(set(ids)):
         raise ValueError(f"{why}: non-chain graph: duplicate node ids")
     in_deg: dict[str, int] = {i: 0 for i in ids}
     out_deg: dict[str, int] = {i: 0 for i in ids}
     adj: dict[str, list[str]] = {i: [] for i in ids}
-    for e in graph["edges"] if isinstance(graph["edges"], list) else []:
+    for e in (edges if isinstance(edges, list) else []):
+        # ORC-G6-P2-03: guard malformed edges
+        if not isinstance(e, dict):
+            raise ValueError(f"{why}: malformed edge (not a dict): {e!r}")
         frm = e.get("from")
         to = e.get("to")
+        if frm is None or to is None:
+            raise ValueError(f"{why}: malformed edge (missing from/to): {e!r}")
         if frm not in in_deg or to not in in_deg:
             raise ValueError(f"{why}: dangling edge {frm!r} -> {to!r}")
         in_deg[to] += 1
@@ -81,6 +89,20 @@ def _chain_order(graph: dict[str, Any], why: str) -> list[str]:
     if len(sources) != 1:
         raise ValueError(
             f"{why}: need exactly one source node, got {len(sources)}")
+    
+    # ORC-G6-P2-04: check for out-of-scope surfaces (solo, pan)
+    node_map = {n.get("id"): n for n in nodes if isinstance(n, dict)}
+    for nid in ids:
+        node = node_map.get(nid)
+        if not isinstance(node, dict):
+            raise ValueError(f"{why}: malformed node: {node!r}")
+        mixer = node.get("mixer") or {}
+        if mixer.get("solo"):
+            raise ValueError(f"{why}: solo not in D5 chain-gain scope (node {nid!r})")
+        pan = mixer.get("pan")
+        if pan is not None and pan != 0.0:
+            raise ValueError(f"{why}: pan not in D5 chain-gain scope (node {nid!r})")
+    
     order = [sources[0]]
     while adj.get(order[-1]):
         nxts = adj[order[-1]]
@@ -105,6 +127,15 @@ def render_chain(
     node's linear gain is applied in chain topo order; the returned block is
     the target node's block (L and R use the same samples — the ctypes read
     fills both channels from the same source).
+
+    ORC-G6-P2-02: ``out_node_id`` must be the terminal node (order[-1]);
+    non-terminal outputs raise ``ValueError`` (D5 chain-only boundary).
+
+    ORC-G6-P2-03: Malformed graphs (missing/invalid node structure) raise
+    ``ValueError`` with fixture-driven reason.
+
+    ORC-G6-P2-04: Out-of-scope surfaces (solo==true, pan!=0) raise
+    ``ValueError`` ("out of D5 chain-gain scope").
     """
     graph = doc.get("signalGraph")
     if not isinstance(graph, dict):
@@ -112,6 +143,12 @@ def render_chain(
     order = _chain_order(graph, why)
     if out_node_id not in order:
         raise ValueError(f"{why}: output node {out_node_id!r} not in chain")
+    # ORC-G6-P2-02: reject non-terminal output nodes
+    if out_node_id != order[-1]:
+        raise ValueError(
+            f"{why}: output node {out_node_id!r} is not terminal "
+            f"(chain ends at {order[-1]!r})"
+        )
     node_map = {n["id"]: n for n in graph["nodes"]}
     gains = [(_linear_gain(node_map[nid]), nid) for nid in order]
     blk = source.block(frames)
