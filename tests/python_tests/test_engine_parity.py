@@ -717,7 +717,20 @@ def test_save_open_roundtrip_v0_fixture(soundforge_lib, tmp_path):
         p.save_to_path(str(temp_json))
     assert temp_json.exists(), "save_to_path did not create file"
 
-    # Re-open from the saved file
+    # Re-open via the native on-disk path (sf_project_open_from_path —
+    # read_file_capped + checked_parse, which from_json does NOT cover;
+    # ORC-G6-P3-01)
+    with Project.open_from_path(str(temp_json)) as p2:
+        assert p2.name == v2_doc["project"]["name"]
+        assert p2.schema_version == 2
+        # Save is a mutator (auditLog entry + modifiedAt stamp), so assert
+        # canonical validity + key fields — NOT dict-equality pre/post save.
+        p2_json = p2.to_json()
+        code, msg = validate_project_json(p2_json.encode("utf-8"))
+        assert code == SF_OK, f"native validate of re-opened project: {msg}"
+        assert validate_project(json.loads(p2_json)) == [], "python validate of re-opened project"
+
+    # Re-validate the raw saved bytes both ways (proves on-disk round-trip)
     saved_bytes = temp_json.read_bytes()
     saved_doc = json.loads(saved_bytes)
 

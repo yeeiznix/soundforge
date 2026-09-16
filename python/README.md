@@ -111,9 +111,9 @@ Byte-identity rule (SEC-G6-07): fixtures are fed as raw bytes to the native side
 
 P3 matrix expansion (docs/PLAN_G6.md §5 P3, §6.2):
 
-- **P2 baseline:** 12 cases (version/schema lockstep, validate decision, migrate, round-trip, non-ASCII, lazy load, D4 anchors, silence, reset_meters, sine, byte identity)
+- **P2 baseline:** 21 parity cases (14 P1 + 7 P2; + 12 legacy schema-tests)
 - **P3 matrix:** 8 chains (0,0) / (-6,0) / (-6,+6) / (+6,0) × 2 block-sizes (64, 256) + save/open round-trip + mono-stereo agreement + negative cases (ORC-G6-P2-02/03/04)
-- **Total:** ~26–30 cases (count grows with evidence; DoD records exact count post-P3)
+- **Total:** 34 parity + 12 legacy = 46 (DoD records final count)
 
 All cases run on both reg and UBSan builds (same binary, two sanitizer configs). No fixed sleeps, no wall clock — tick is deterministic.
 
