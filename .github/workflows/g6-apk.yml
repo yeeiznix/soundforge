@@ -17,16 +17,14 @@ jobs:
       - name: Checkout exact G6 commit d92b7ae
         uses: actions/checkout@v4
         with:
-          ref: d92b7ae
+          ref: d92b7aeb1aad51873f2b9a3e33bb7da3f75bc27f
           fetch-depth: 0
 
       - name: Verify checkout
         run: |
           echo "HEAD: $(git rev-parse HEAD)"
-          echo "Expected: d92b7aeb1aad51873f2b9a3e33bb7da3f75bc27f"
-          git rev-parse HEAD | grep -q "d92b7ae" || exit 1
-          echo "Tag on HEAD:"
-          git describe --tags --exact-match HEAD || echo "(no exact tag)"
+          EXPECTED="d92b7aeb1aad51873f2b9a3e33bb7da3f75bc27f"
+          test "$(git rev-parse HEAD)" = "$EXPECTED" || { echo "ERROR: checkout mismatch"; exit 1; }
 
       - name: Setup Java JDK 17
         uses: actions/setup-java@v4
@@ -53,10 +51,6 @@ jobs:
       - name: Install CMake 3.22.1
         run: |
           $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "cmake;3.22.1"
-
-      - name: Accept Android SDK licenses
-        run: |
-          echo -e "\n\ny\n" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
 
       - name: Make gradlew executable
         run: chmod +x ./gradlew
